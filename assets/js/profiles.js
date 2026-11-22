@@ -93,7 +93,10 @@ function buildWheel() {
       chip.classList.add("slot-rot");
       rotHost.append(chip);
     } else {
-      if (id === "knob_click") chip.classList.add("slot-knob");
+      chip.classList.add(
+        id === "knob_click" ? "slot-knob"
+        : id.startsWith("button_top") ? "slot-top"
+        : "slot-side");
       chip.style.left = x + "%";
       chip.style.top = y + "%";
       slotsHost.append(chip);

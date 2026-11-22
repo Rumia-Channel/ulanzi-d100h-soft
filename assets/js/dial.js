@@ -44,18 +44,19 @@ export function makeSpinner(markerEl) {
   };
 }
 
-// Dial inputs: [id, label, x%, y% within the wheel area].
-// Physical pad layout: three buttons above the dial, two pairs flanking
-// it on the left/right, knob in the dial center.
+// Dial inputs: [id, label, x%, y%] within the wheel area (zone classes
+// carry the size). Physical pad geometry: the dial is a circle; the top
+// row of three buttons spans ~1.5x the dial width; each side column of
+// two buttons spans ~1.4x the dial height.
 export const INPUT_SLOTS = [
-  ["button_top_left", "top-L", 38, 10],
-  ["button_top_middle", "top", 50, 7],
-  ["button_top_right", "top-R", 62, 10],
-  ["button_upper_left", "up-L", 15, 38],
-  ["button_lower_left", "low-L", 15, 60],
-  ["button_upper_right", "up-R", 85, 38],
-  ["button_lower_right", "low-R", 85, 60],
-  ["knob_click", "knob", 50, 49],
+  ["button_top_left", "top-L", 16, 6.5],
+  ["button_top_middle", "top", 50, 6.5],
+  ["button_top_right", "top-R", 84, 6.5],
+  ["button_upper_left", "up-L", 9, 30],
+  ["button_lower_left", "low-L", 9, 68],
+  ["button_upper_right", "up-R", 91, 30],
+  ["button_lower_right", "low-R", 91, 68],
+  ["knob_click", "knob", 50, 50],
   ["rotate_cw", "rotate ↻", null],
   ["rotate_ccw", "rotate ↺", null],
   ["rotate_held_cw", "held ↻", null],

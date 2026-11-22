@@ -264,6 +264,22 @@ dd { margin: 0; font-family: var(--mono); font-size: 13px; }
 .slot.sel { border-color: var(--accent); color: var(--accent); box-shadow: 0 0 0.9em #1fd3b855; }
 .slot.fire { background: var(--accent-soft); border-color: var(--accent); color: var(--accent); }
 .slot-knob { width: 3.4em; height: 3.4em; border-radius: 50%; padding: 0; font-size: 0.72em; }
+/* Proportions vs the 58cqw dial: top row spans ~1.5x dial width
+   (3 x 19cqw buttons + gaps over 87cqw), side columns span ~1.4x
+   dial height (2 x 36cqw buttons + gap over 81cqw). */
+.slot-top {
+  width: 19cqw; height: 7.5cqw;
+  border-radius: 1.2em;
+  padding: 0;
+}
+.slot-side {
+  width: 12cqw; height: 36cqw;
+  border-radius: 1.2em;
+  padding: 0;
+  writing-mode: vertical-rl;
+  font-size: 0.72em;
+  letter-spacing: 0.08em;
+}
 #wheel-rotate {
   position: absolute;
   left: 50%; bottom: 0.4em;
