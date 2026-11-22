@@ -1,0 +1,11 @@
+[package]
+name = "ulanzi-d100h-soft"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+btleplug = "0.13.5"
+futures-util = "0.3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+uuid = "1"
+ulanzi-d100h = "0.1"
