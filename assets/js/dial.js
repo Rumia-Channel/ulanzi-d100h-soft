@@ -49,13 +49,13 @@ export function makeSpinner(markerEl) {
 // row of three buttons spans ~1.5x the dial width; each side column of
 // two buttons spans ~1.4x the dial height.
 export const INPUT_SLOTS = [
-  ["button_top_left", "top-L", 16, 6.5],
-  ["button_top_middle", "top", 50, 6.5],
-  ["button_top_right", "top-R", 84, 6.5],
-  ["button_upper_left", "up-L", 9, 30],
-  ["button_lower_left", "low-L", 9, 68],
-  ["button_upper_right", "up-R", 91, 30],
-  ["button_lower_right", "low-R", 91, 68],
+  ["button_top_left", "top-L", 20, 8],
+  ["button_top_middle", "top", 50, 8],
+  ["button_top_right", "top-R", 80, 8],
+  ["button_upper_left", "up-L", 7, 26],
+  ["button_lower_left", "low-L", 7, 70],
+  ["button_upper_right", "up-R", 93, 26],
+  ["button_lower_right", "low-R", 93, 70],
   ["knob_click", "knob", 50, 50],
   ["rotate_cw", "rotate ↻", null],
   ["rotate_ccw", "rotate ↺", null],
