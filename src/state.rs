@@ -86,6 +86,8 @@ pub struct Snapshot {
     pub status: UiStatus,
     pub device: DeviceInfo,
     pub feed: Vec<FeedEntry>,
+    /// Name of the rule currently driving dial actions, if any.
+    pub active_rule: Option<String>,
 }
 
 /// Frame pushed to WebSocket clients.
@@ -102,12 +104,20 @@ pub struct AppState {
     pub device: std::sync::Arc<RwLock<DeviceInfo>>,
     pub feed_tx: broadcast::Sender<FeedEntry>,
     pub feed: std::sync::Arc<RwLock<VecDeque<FeedEntry>>>,
+    /// Written by the engine; name of the currently active config rule.
+    pub active_rule: std::sync::Arc<RwLock<Option<String>>>,
     pub ble_tx: mpsc::UnboundedSender<BleRequest>,
     /// Random token required on /api and /ws as ?token=…, printed as part of
     /// the tray-open URL. Protects the loopback server from other local pages.
     pub token: String,
     /// Broadcast to every task when the process should exit.
     pub shutdown: watch::Sender<bool>,
+    /// Active mapping config, hot-reloaded by the engine and the web layer.
+    pub config: std::sync::Arc<RwLock<dial_core::Config>>,
+    /// Exe name owning the current foreground window (engine-maintained).
+    pub foreground: std::sync::Arc<RwLock<String>>,
+    /// Notify the engine when config changes.
+    pub config_reload: watch::Sender<()>,
 }
 
 impl AppState {
@@ -133,6 +143,7 @@ impl AppState {
             status,
             device: self.device.read().await.clone(),
             feed: self.feed.read().await.iter().cloned().collect(),
+            active_rule: self.active_rule.read().await.clone(),
         }
     }
 }

@@ -1,10 +1,11 @@
 //! ulanzi-d100h-soft: background tray app that bridges the Ulanzi D100H dial
-//! to a local read-only web UI. Design follows narou.rs's web server: tokio
-//! runtime hosts axum + BLE worker, tray runs its own Win32 message loop on a
-//! std::thread, loopback token guards /api and /ws.
+//! to a local web UI and drives per-app key mappings. Design follows narou.rs:
+//! tokio hosts axum + BLE worker + rule engine; tray runs its own Win32 loop.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod ble;
+mod config;
+mod engine;
 mod state;
 mod tray;
 mod web;
@@ -31,15 +32,21 @@ async fn main() {
     let (feed_tx, _feed_rx) = broadcast::channel(256);
     let (ble_tx, ble_rx) = mpsc::unbounded_channel::<BleRequest>();
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let (reload_tx, reload_rx) = watch::channel(());
+    let config = Arc::new(RwLock::new(config::load()));
 
     let app = AppState {
         status: status_tx,
         device: Arc::new(RwLock::new(state::DeviceInfo::default())),
         feed_tx,
         feed: Arc::new(RwLock::new(VecDeque::new())),
+        active_rule: Arc::new(RwLock::new(None)),
         ble_tx,
         token: token.clone(),
         shutdown: shutdown_tx,
+        config: config.clone(),
+        foreground: Arc::new(RwLock::new(String::new())),
+        config_reload: reload_tx,
     };
 
     // Windows tray icon on its own thread (Win32 message loop).
@@ -56,8 +63,17 @@ async fn main() {
     };
     let server = axum::serve(listener, web::router(app.clone()));
 
-    // BLE worker.
+    // BLE worker + rule engine + foreground watcher.
     let ble_task = tokio::spawn(ble::run(app.clone(), ble_rx));
+    let focus_rx = dial_win32::focus_events();
+    let engine = engine::Engine::new(
+        app.clone(),
+        reload_rx,
+        app.feed_tx.subscribe(),
+        focus_rx,
+        config,
+    );
+    let engine_task = tokio::spawn(engine.run());
 
     println!("ulanzi-d100h-soft listening on {url}");
 
@@ -71,4 +87,5 @@ async fn main() {
         _ = async { while !*shutdown.borrow() { if shutdown.changed().await.is_err() { break } } } => {}
     }
     ble_task.abort();
+    engine_task.abort();
 }

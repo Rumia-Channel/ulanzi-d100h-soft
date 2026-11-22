@@ -10,6 +10,8 @@
 <header>
   <h1>Ulanzi D100H</h1>
   <span id="status" class="badge">connecting…</span>
+  <span id="fg-app" class="badge">—</span>
+  <span id="active-rule" class="badge">rule: —</span>
   <button id="reconnect" type="button">Reconnect</button>
 </header>
 
@@ -25,6 +27,19 @@
       <dt>Battery</dt><dd id="di-battery">—</dd>
     </dl>
     <div class="queries">
+      Control:
+      <label><input type="checkbox" id="ctl-haptics"> haptics</label>
+      <select id="ctl-sleep">
+        <option value="">sleep…</option>
+        <option value="0">off</option>
+        <option value="3600">1h</option>
+        <option value="7200">2h</option>
+        <option value="10800">3h</option>
+        <option value="14400">4h</option>
+      </select>
+      <button id="ctl-apply" type="button">Apply</button>
+    </div>
+    <div class="queries">
       Query:
       <button data-query="firmware">Firmware</button>
       <button data-query="serial">Serial</button>
@@ -35,8 +50,30 @@
   </section>
 
   <section class="card" id="feed-card">
-    <h2>Event feed</h2>
+    <h2>Event feed
+      <button id="feed-pause" type="button" class="mini">pause</button>
+      <button id="feed-clear" type="button" class="mini">clear</button>
+    </h2>
     <ol id="feed" aria-live="polite"></ol>
+  </section>
+
+  <section class="card" id="rules-card">
+    <h2>App rules <span class="hint">(higher priority wins)</span></h2>
+    <label class="row"><input type="checkbox" id="cfg-enabled"> mappings enabled</label>
+    <datalist id="proc-list"></datalist>
+    <div id="rules"></div>
+    <div class="row">
+      <button id="add-rule" type="button">+ Add rule</button>
+      <button id="save-config" type="button">Save</button>
+      <button id="export-config" type="button">Export</button>
+      <button id="import-config" type="button">Import</button>
+      <span id="save-status" role="status"></span>
+    </div>
+    <details id="import-box" hidden>
+      <summary>Paste config JSON</summary>
+      <textarea id="import-text" rows="8" spellcheck="false"></textarea>
+      <button id="import-apply" type="button">Validate &amp; save</button>
+    </details>
   </section>
 </main>
 

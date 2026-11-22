@@ -95,12 +95,18 @@
       di.battery.textContent = `${entry.percent}%${entry.charging ? " (charging)" : ""}`;
     } else if (entry.subtype === "status") {
       setStatus(entry.status);
+      const m = /rule "(.+)" active/.exec(entry.detail || "");
+      if (m) document.getElementById("active-rule").textContent = "rule: " + m[1];
+      const f = /foreground: (.+)/.exec(entry.detail || "");
+      if (f) document.getElementById("fg-app").textContent = f[1];
     }
   }
 
   function applySnapshot(data) {
     setStatus(data.status);
     renderDevice(data.device);
+    document.getElementById("active-rule").textContent =
+      "rule: " + (data.active_rule || "—");
     feedEl.replaceChildren();
     for (const entry of data.feed) appendEntry(entry);
   }
@@ -140,4 +146,298 @@
 
   if (!token) setStatus("no token — open from the tray icon");
   connect();
+
+/* ---- App rules editor ---- */
+
+const INPUT_IDS = [
+  ["button_top_left", "Button top-left"],
+  ["button_top_middle", "Button top-middle"],
+  ["button_top_right", "Button top-right"],
+  ["button_upper_left", "Button upper-left"],
+  ["button_upper_right", "Button upper-right"],
+  ["button_lower_left", "Button lower-left"],
+  ["button_lower_right", "Button lower-right"],
+  ["knob_click", "Knob click"],
+  ["rotate_cw", "Rotate clockwise"],
+  ["rotate_ccw", "Rotate counter-clockwise"],
+  ["rotate_held_cw", "Rotate held clockwise"],
+  ["rotate_held_ccw", "Rotate held counter-clockwise"],
+];
+const MATCH_TYPES = [
+  ["foreground", "foreground app"],
+  ["running", "process running"],
+  ["not_running", "process NOT running"],
+  ["always", "always (default)"],
+];
+
+let config = null;
+
+function el(tag, attrs = {}, ...children) {
+  const node = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") node.className = v;
+    else if (k === "type") node.type = v;
+    else if (k === "checked") node.checked = v;
+    else node.setAttribute(k, v);
+  }
+  node.append(...children);
+  return node;
+}
+
+function renderRules() {
+  const host = document.getElementById("rules");
+  host.replaceChildren();
+  const rules = [...config.rules].sort((a, b) => b.priority - a.priority);
+  for (const rule of rules) {
+    const idx = config.rules.indexOf(rule);
+    const card = el("div", { class: "rule" });
+
+    const name = el("input", { type: "text", value: rule.name });
+    const prio = el("input", { type: "number", value: rule.priority, step: "1" });
+    const matchSel = el("select");
+    for (const [v, label] of MATCH_TYPES) {
+      matchSel.append(el("option", { value: v }, label));
+    }
+    matchSel.value = rule.match.type;
+    const procInput = el("input", {
+      type: "text", value: rule.match.process || "", placeholder: "process.exe",
+      list: "proc-list",
+      style: rule.match.type === "always" ? "display:none" : "",
+    });
+    matchSel.onchange = () => {
+      procInput.style.display = matchSel.value === "always" ? "none" : "";
+    };
+    const useFg = el("button", { type: "button", title: "use current foreground app" }, "use fg");
+    useFg.onclick = async () => {
+      const fg = await currentForeground();
+      if (fg) {
+        matchSel.value = "foreground";
+        procInput.style.display = "";
+        procInput.value = fg;
+      }
+    };
+    const del = el("button", { class: "del", type: "button" }, "delete");
+    del.onclick = () => { config.rules.splice(idx, 1); renderRules(); };
+    card.append(el("div", { class: "rule-head" },
+      name, el("span", { class: "hint" }, "prio"), prio, matchSel, procInput, useFg, del));
+
+    const bindings = el("div", { class: "bindings" });
+    const usedInputs = new Set(rule.bindings.map(b => b.input));
+    for (const binding of rule.bindings) {
+      bindings.append(bindingRow(rule, binding));
+    }
+    const addSel = el("select");
+    addSel.append(el("option", { value: "" }, "+ bind input…"));
+    for (const [id, label] of INPUT_IDS) {
+      if (!usedInputs.has(id)) addSel.append(el("option", { value: id }, label));
+    }
+    addSel.onchange = () => {
+      if (!addSel.value) return;
+      rule.bindings.push({ input: addSel.value, action: { type: "none" } });
+      renderRules();
+    };
+    bindings.append(addSel);
+    card.append(bindings);
+    host.append(card);
+
+    rule._ui = { name, prio, matchSel, procInput };
+  }
+}
+
+function bindingRow(rule, binding) {
+  const row = el("div", { class: "binding-row" });
+  const sel = el("select");
+  for (const [id, label] of INPUT_IDS) {
+    sel.append(el("option", { value: id }, label));
+  }
+  sel.value = binding.input;
+  sel.onchange = () => { binding.input = sel.value; };
+
+  const actSel = el("select");
+  for (const [v, label] of [["none", "none"], ["keys", "key chord"], ["command", "command"]]) {
+    actSel.append(el("option", { value: v }, label));
+  }
+  actSel.value = binding.action.type;
+
+  const valueInput = el("input", { type: "text", placeholder: "keys, e.g. ctrl+alt+j" });
+  const syncValue = () => {
+    if (actSel.value === "keys") {
+      valueInput.value = (binding.action.keys || []).join("+");
+      valueInput.style.display = "";
+    } else if (actSel.value === "command") {
+      valueInput.value = binding.action.name || "";
+      valueInput.style.display = "";
+    } else {
+      valueInput.style.display = "none";
+    }
+  };
+  syncValue();
+  actSel.onchange = () => {
+    binding.action = { type: actSel.value };
+    if (actSel.value === "keys") binding.action.keys = [];
+    if (actSel.value === "command") binding.action.name = "";
+    syncValue();
+  };
+  valueInput.oninput = () => {
+    if (actSel.value === "keys") {
+      binding.action.keys = valueInput.value.split("+").map(s => s.trim()).filter(Boolean);
+    } else if (actSel.value === "command") {
+      binding.action.name = valueInput.value;
+    }
+  };
+
+  const del = el("button", { class: "del", type: "button" }, "×");
+  del.onclick = () => {
+    rule.bindings.splice(rule.bindings.indexOf(binding), 1);
+    renderRules();
+  };
+  row.append(sel, actSel, valueInput, del);
+  return row;
+}
+
+async function saveConfig() {
+  const status = document.getElementById("save-status");
+  status.className = "";
+  status.textContent = "saving…";
+  config.enabled = document.getElementById("cfg-enabled").checked;
+  for (const rule of config.rules) {
+    if (!rule._ui) continue;
+    rule.name = rule._ui.name.value;
+    rule.priority = parseInt(rule._ui.prio.value, 10) || 0;
+    const type = rule._ui.matchSel.value;
+    rule.match = type === "always"
+      ? { type }
+      : { type, process: rule._ui.procInput.value.trim().toLowerCase() };
+    delete rule._ui;
+  }
+  const res = await fetch(`/api/config?token=${encodeURIComponent(token)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(config),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (body.saved) {
+    status.className = "ok";
+    status.textContent = "saved";
+    renderRules();
+  } else {
+    status.className = "err";
+    status.textContent = body.error || `HTTP ${res.status}`;
+  }
+}
+
+async function initRules() {
+  const res = await fetch(`/api/config?token=${encodeURIComponent(token)}`);
+  if (!res.ok) return;
+  config = await res.json();
+  document.getElementById("cfg-enabled").checked = config.enabled;
+  document.getElementById("add-rule").onclick = () => {
+    config.rules.push({ name: "new rule", priority: 0, match: { type: "always" }, bindings: [] });
+    renderRules();
+  };
+  document.getElementById("save-config").onclick = saveConfig;
+  renderRules();
+}
+initRules();
+
+/* ---- Advanced controls ---- */
+
+// Feed pause/clear.
+let feedPaused = false;
+document.getElementById("feed-pause").onclick = (e) => {
+  feedPaused = !feedPaused;
+  e.target.textContent = feedPaused ? "resume" : "pause";
+};
+document.getElementById("feed-clear").onclick = () => feedEl.replaceChildren();
+
+// Wrap appendEntry: pause drops live entries (they're in the feed buffer
+// server-side anyway; the next snapshot resyncs).
+const origAppend = appendEntry;
+appendEntry = (entry) => { if (!feedPaused) origAppend(entry); };
+
+// Device controls: send writes through /api/command.
+document.getElementById("ctl-apply").onclick = async () => {
+  const haptics = document.getElementById("ctl-haptics").checked;
+  const sleep = document.getElementById("ctl-sleep").value;
+  await fetch(`/api/command?token=${encodeURIComponent(token)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name: "set_haptics", value: haptics }),
+  });
+  if (sleep !== "") {
+    await fetch(`/api/command?token=${encodeURIComponent(token)}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "set_sleep_timer", value: Number(sleep) }),
+    });
+  }
+};
+// Reflect device state into the controls when replies arrive.
+const syncControls = () => {
+  if (di.haptics.textContent === "on" || di.haptics.textContent === "off")
+    document.getElementById("ctl-haptics").checked = di.haptics.textContent === "on";
+  const secs = parseInt(di.sleep.textContent, 10);
+  if (!Number.isNaN(secs)) {
+    const sel = document.getElementById("ctl-sleep");
+    if ([...sel.options].some(o => Number(o.value) === secs)) sel.value = String(secs);
+  }
+};
+new MutationObserver(syncControls).observe(di.haptics, { childList: true });
+new MutationObserver(syncControls).observe(di.sleep, { childList: true });
+
+// Process autocomplete for match process inputs.
+fetch(`/api/processes?token=${encodeURIComponent(token)}`)
+  .then(r => r.ok ? r.json() : [])
+  .then(names => {
+    const list = document.getElementById("proc-list");
+    names.filter(n => n.endsWith(".exe")).forEach(n => {
+      const o = document.createElement("option");
+      o.value = n;
+      list.append(o);
+    });
+  })
+  .catch(() => {});
+
+// "use foreground" button per rule — filled in renderRules below.
+async function currentForeground() {
+  const res = await fetch(`/api/foreground?token=${encodeURIComponent(token)}`);
+  return res.ok ? (await res.json()).foreground : null;
+}
+
+// Export: download config.json.
+document.getElementById("export-config").onclick = () => {
+  const blob = new Blob([JSON.stringify(config, null, 2)], { type: "application/json" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "ulanzi-d100h-soft.config.json";
+  a.click();
+  URL.revokeObjectURL(a.href);
+};
+
+// Import: paste JSON, reuse the PUT path for validation.
+document.getElementById("import-config").onclick = () => {
+  const box = document.getElementById("import-box");
+  box.hidden = !box.hidden;
+};
+document.getElementById("import-apply").onclick = async () => {
+  const text = document.getElementById("import-text").value;
+  const status = document.getElementById("save-status");
+  const res = await fetch(`/api/config?token=${encodeURIComponent(token)}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: text,
+  });
+  const body = await res.json().catch(() => ({}));
+  if (body.saved) {
+    status.className = "ok";
+    status.textContent = "imported";
+    config = JSON.parse(text);
+    document.getElementById("cfg-enabled").checked = config.enabled;
+    renderRules();
+    document.getElementById("import-box").hidden = true;
+  } else {
+    status.className = "err";
+    status.textContent = body.error || "invalid JSON";
+  }
+};
 })();
