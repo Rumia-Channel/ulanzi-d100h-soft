@@ -7,17 +7,30 @@ use axum::{
 };
 
 const INDEX_HTML: &str = include_str!("../../assets/index.html");
-const APP_JS: &str = include_str!("../../assets/app.js");
 const STYLE_CSS: &str = include_str!("../../assets/style.css");
+
+macro_rules! js {
+    ($name:literal) => {
+        (
+            include_str!(concat!("../../assets/js/", $name)),
+            "text/javascript; charset=utf-8"
+        )
+    };
+}
 
 pub fn index() -> Response {
     ([(header::CONTENT_TYPE, "text/html; charset=utf-8")], INDEX_HTML).into_response()
 }
 
 pub fn asset(path: &str) -> Response {
-    let (content, mime) = match path {
-        "app.js" => (APP_JS, "text/javascript; charset=utf-8"),
-        "style.css" => (STYLE_CSS, "text/css; charset=utf-8"),
+    let (content, mime) = match path.strip_prefix("js/") {
+        Some("dom.js") => js!("dom.js"),
+        Some("dial.js") => js!("dial.js"),
+        Some("feed.js") => js!("feed.js"),
+        Some("device.js") => js!("device.js"),
+        Some("profiles.js") => js!("profiles.js"),
+        Some("main.js") => js!("main.js"),
+        _ if path == "style.css" => (STYLE_CSS, "text/css; charset=utf-8"),
         _ => return StatusCode::NOT_FOUND.into_response(),
     };
     Response::builder()

@@ -31,8 +31,8 @@ pub struct CommandQuery {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/", get(|| async { assets::index() }))
-        .route("/assets/{name}", get(|Path(name): Path<String>| async move {
-            assets::asset(&name)
+        .route("/assets/{*path}", get(|Path(path): Path<String>| async move {
+            assets::asset(&path)
         }))
         .route("/api/status", get(api_status))
         .route("/api/query", get(api_query))

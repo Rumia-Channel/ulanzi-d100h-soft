@@ -3,80 +3,184 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>ulanzi-d100h-soft</title>
+<title>ulanzi&hairsp;d100h</title>
 <link rel="stylesheet" href="/assets/style.css">
 </head>
 <body>
-<header>
-  <h1>Ulanzi D100H</h1>
-  <span id="status" class="badge">connecting…</span>
-  <span id="fg-app" class="badge">—</span>
-  <span id="active-rule" class="badge">rule: —</span>
-  <button id="reconnect" type="button">Reconnect</button>
-</header>
+
+<nav id="rail">
+  <div class="brand">
+    <svg viewBox="0 0 32 32" width="20" height="20" aria-hidden="true">
+      <circle cx="16" cy="16" r="13" fill="none" stroke="var(--accent)" stroke-width="2.5"/>
+      <circle cx="16" cy="16" r="4.5" fill="var(--accent)"/>
+    </svg>
+    <h1>ulanzi&hairsp;d100h</h1>
+  </div>
+
+  <div class="rail-status">
+    <span id="status" class="pill pill-status">connecting…</span>
+    <span id="fg-app" class="pill" title="foreground app">—</span>
+    <span id="active-rule" class="pill pill-rule" title="active rule">rule: —</span>
+  </div>
+
+  <button id="nav-device" class="rail-item sel" type="button">
+    <span class="rail-ico">◉</span> Device
+  </button>
+
+  <div class="rail-label">Profiles</div>
+  <div id="rail-profiles"></div>
+  <button id="add-profile" class="rail-item ghost" type="button">
+    <span class="rail-ico">＋</span> New profile
+  </button>
+
+  <div class="rail-label">Settings</div>
+  <button id="nav-config" class="rail-item" type="button">
+    <span class="rail-ico">⤓</span> Import / Export
+  </button>
+
+  <div class="rail-foot">
+    <label class="switch" title="enable app mappings">
+      <input type="checkbox" id="cfg-enabled"><i></i>
+    </label>
+    <span class="hint">mappings on</span>
+    <button id="save-config" class="btn btn-accent" type="button">Save</button>
+    <span id="save-status" class="hint"></span>
+  </div>
+</nav>
 
 <main>
-  <section class="card" id="device">
-    <h2>Device</h2>
-    <dl id="device-info">
-      <dt>Firmware</dt><dd id="di-firmware">—</dd>
-      <dt>Serial</dt><dd id="di-serial">—</dd>
-      <dt>Address</dt><dd id="di-address">—</dd>
-      <dt>Haptics</dt><dd id="di-haptics">—</dd>
-      <dt>Sleep timer</dt><dd id="di-sleep">—</dd>
-      <dt>Battery</dt><dd id="di-battery">—</dd>
-    </dl>
-    <div class="queries">
-      Control:
-      <label><input type="checkbox" id="ctl-haptics"> haptics</label>
-      <select id="ctl-sleep">
-        <option value="">sleep…</option>
-        <option value="0">off</option>
-        <option value="3600">1h</option>
-        <option value="7200">2h</option>
-        <option value="10800">3h</option>
-        <option value="14400">4h</option>
-      </select>
-      <button id="ctl-apply" type="button">Apply</button>
+  <!-- ============ DEVICE PAGE ============ -->
+  <section id="page-device" class="page">
+    <div class="card" id="device">
+      <div class="device-hero">
+        <svg id="dial-svg" viewBox="0 0 200 200" width="210" height="210" aria-hidden="true">
+          <circle cx="100" cy="100" r="94" fill="#161a21" stroke="#2c3746" stroke-width="1.5"/>
+          <circle cx="100" cy="100" r="88" fill="none" stroke="#1f2733" stroke-width="16"/>
+          <g id="dial-ticks"></g>
+          <circle cx="100" cy="100" r="64" fill="#1d242e" stroke="#2c3746" stroke-width="1"/>
+          <g id="dial-grip"></g>
+          <circle cx="100" cy="100" r="26" fill="#141922" stroke="#323d4e" stroke-width="1.2"/>
+          <g id="dial-marker">
+            <circle cx="100" cy="34" r="4" fill="var(--accent)"/>
+          </g>
+        </svg>
+      </div>
+      <dl id="device-info">
+        <dt>Firmware</dt><dd id="di-firmware">—</dd>
+        <dt>Serial</dt><dd id="di-serial">—</dd>
+        <dt>Address</dt><dd id="di-address">—</dd>
+        <dt>Haptics</dt><dd id="di-haptics">—</dd>
+        <dt>Sleep timer</dt><dd id="di-sleep">—</dd>
+        <dt>Battery</dt><dd id="di-battery">—</dd>
+      </dl>
+      <div class="ctl">
+        <span class="ctl-label">haptics</span>
+        <label class="switch"><input type="checkbox" id="ctl-haptics"><i></i></label>
+        <span class="ctl-label">sleep</span>
+        <select id="ctl-sleep">
+          <option value="">—</option>
+          <option value="0">off</option>
+          <option value="3600">1h</option>
+          <option value="7200">2h</option>
+          <option value="10800">3h</option>
+          <option value="14400">4h</option>
+        </select>
+        <button id="ctl-apply" class="btn btn-accent" type="button">Apply</button>
+      </div>
+      <div class="queries">
+        <button data-query="firmware" type="button">Firmware</button>
+        <button data-query="serial" type="button">Serial</button>
+        <button data-query="haptics" type="button">Haptics</button>
+        <button data-query="sleep_timer" type="button">Sleep timer</button>
+        <button data-query="address" type="button">Address</button>
+      </div>
+      <button id="reconnect" class="btn btn-ghost" type="button">Reconnect device</button>
     </div>
-    <div class="queries">
-      Query:
-      <button data-query="firmware">Firmware</button>
-      <button data-query="serial">Serial</button>
-      <button data-query="haptics">Haptics</button>
-      <button data-query="sleep_timer">Sleep timer</button>
-      <button data-query="address">Address</button>
+
+    <div class="card" id="feed-card">
+      <h2>Event feed
+        <span class="h2-actions">
+          <button id="feed-pause" class="btn btn-ghost btn-sm" type="button">pause</button>
+          <button id="feed-clear" class="btn btn-ghost btn-sm" type="button">clear</button>
+        </span>
+      </h2>
+      <ol id="feed" aria-live="polite"></ol>
     </div>
   </section>
 
-  <section class="card" id="feed-card">
-    <h2>Event feed
-      <button id="feed-pause" type="button" class="mini">pause</button>
-      <button id="feed-clear" type="button" class="mini">clear</button>
-    </h2>
-    <ol id="feed" aria-live="polite"></ol>
+  <!-- ============ PROFILE PAGE ============ -->
+  <section id="page-profile" class="page" hidden>
+    <div class="card" id="wheel-card">
+      <div id="wheel">
+        <svg id="wheel-svg" viewBox="0 0 200 200" width="260" height="260" aria-hidden="true">
+          <circle cx="100" cy="100" r="94" fill="#161a21" stroke="#2c3746" stroke-width="1.5"/>
+          <circle cx="100" cy="100" r="88" fill="none" stroke="#1f2733" stroke-width="16"/>
+          <g id="wheel-ticks"></g>
+          <circle cx="100" cy="100" r="64" fill="#1d242e" stroke="#2c3746" stroke-width="1"/>
+          <circle cx="100" cy="100" r="26" fill="#141922" stroke="#323d4e" stroke-width="1.2"/>
+        </svg>
+        <div id="wheel-slots"></div>
+        <div id="wheel-rotate"></div>
+      </div>
+    </div>
+
+    <div class="card" id="inspector">
+      <input id="prof-name" type="text" placeholder="profile name">
+      <div id="insp-input">
+        <h2 id="insp-title">Select a dial input</h2>
+        <div id="insp-editor" hidden>
+          <div class="field">
+            <span class="field-label">action</span>
+            <select id="act-type">
+              <option value="none">none</option>
+              <option value="keys">key chord</option>
+              <option value="command">command</option>
+            </select>
+          </div>
+          <div class="field">
+            <span class="field-label">value</span>
+            <input id="act-value" type="text" placeholder="e.g. ctrl+alt+j">
+          </div>
+        </div>
+        <p id="insp-hint" class="hint">Click a button ring segment, the knob, or a rotation chip on the left.</p>
+      </div>
+      <div id="prof-meta">
+        <div class="field">
+          <span class="field-label">active when</span>
+          <select id="match-type">
+            <option value="foreground">foreground app</option>
+            <option value="running">process running</option>
+            <option value="not_running">process NOT running</option>
+            <option value="always">always (fallback)</option>
+          </select>
+          <input id="match-proc" type="text" list="proc-list" placeholder="process.exe">
+          <button id="use-fg" class="btn btn-ghost btn-sm" type="button" title="use current foreground app">use fg</button>
+        </div>
+        <div class="prof-actions">
+          <button id="del-profile" class="btn del" type="button">delete profile</button>
+        </div>
+      </div>
+    </div>
   </section>
 
-  <section class="card" id="rules-card">
-    <h2>App rules <span class="hint">(higher priority wins)</span></h2>
-    <label class="row"><input type="checkbox" id="cfg-enabled"> mappings enabled</label>
-    <datalist id="proc-list"></datalist>
-    <div id="rules"></div>
-    <div class="row">
-      <button id="add-rule" type="button">+ Add rule</button>
-      <button id="save-config" type="button">Save</button>
-      <button id="export-config" type="button">Export</button>
-      <button id="import-config" type="button">Import</button>
-      <span id="save-status" role="status"></span>
+  <!-- ============ IMPORT / EXPORT PAGE ============ -->
+  <section id="page-config" class="page" hidden>
+      <h2>Export</h2>
+      <p class="hint">Download the current mapping config as JSON.</p>
+      <button id="export-config" class="btn" type="button">Download config.json</button>
+      <h2 style="margin-top:24px">Import</h2>
+      <p class="hint">Paste a config JSON. It is validated server-side before saving.</p>
+      <textarea id="import-text" rows="12" spellcheck="false" placeholder='{"enabled":true,"rules":[…]}'></textarea>
+      <div class="row">
+        <button id="import-apply" class="btn" type="button">Validate &amp; save</button>
+        <span id="import-status" class="hint"></span>
+      </div>
     </div>
-    <details id="import-box" hidden>
-      <summary>Paste config JSON</summary>
-      <textarea id="import-text" rows="8" spellcheck="false"></textarea>
-      <button id="import-apply" type="button">Validate &amp; save</button>
-    </details>
   </section>
+
+  <datalist id="proc-list"></datalist>
 </main>
 
-<script src="/assets/app.js"></script>
+<script type="module" src="/assets/js/main.js"></script>
 </body>
 </html>
