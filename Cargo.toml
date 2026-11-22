@@ -6,6 +6,13 @@ edition = "2024"
 [dependencies]
 btleplug = "0.13.5"
 futures-util = "0.3"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time", "net", "sync"] }
 uuid = "1"
 ulanzi-d100h = "0.1"
+tray-icon = "0.26.1"
+axum = { version = "0.8.9", features = ["ws"] }
+tokio-stream = { version = "0.1.19", features = ["sync"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Console"] }
+getrandom = "0.4.3"

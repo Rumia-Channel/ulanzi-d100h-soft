@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ulanzi-d100h-soft</title>
+<link rel="stylesheet" href="/assets/style.css">
+</head>
+<body>
+<header>
+  <h1>Ulanzi D100H</h1>
+  <span id="status" class="badge">connecting…</span>
+  <button id="reconnect" type="button">Reconnect</button>
+</header>
+
+<main>
+  <section class="card" id="device">
+    <h2>Device</h2>
+    <dl id="device-info">
+      <dt>Firmware</dt><dd id="di-firmware">—</dd>
+      <dt>Serial</dt><dd id="di-serial">—</dd>
+      <dt>Address</dt><dd id="di-address">—</dd>
+      <dt>Haptics</dt><dd id="di-haptics">—</dd>
+      <dt>Sleep timer</dt><dd id="di-sleep">—</dd>
+      <dt>Battery</dt><dd id="di-battery">—</dd>
+    </dl>
+    <div class="queries">
+      Query:
+      <button data-query="firmware">Firmware</button>
+      <button data-query="serial">Serial</button>
+      <button data-query="haptics">Haptics</button>
+      <button data-query="sleep_timer">Sleep timer</button>
+      <button data-query="address">Address</button>
+    </div>
+  </section>
+
+  <section class="card" id="feed-card">
+    <h2>Event feed</h2>
+    <ol id="feed" aria-live="polite"></ol>
+  </section>
+</main>
+
+<script src="/assets/app.js"></script>
+</body>
+</html>

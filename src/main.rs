@@ -1,109 +1,74 @@
-//! Connect to an Ulanzi D100H Dial and print decoded vendor events.
-//! Adapted from the `events` example in https://github.com/kriomant/ulanzi-d100h.
-use std::{error::Error, time::Duration};
+//! ulanzi-d100h-soft: background tray app that bridges the Ulanzi D100H dial
+//! to a local read-only web UI. Design follows narou.rs's web server: tokio
+//! runtime hosts axum + BLE worker, tray runs its own Win32 message loop on a
+//! std::thread, loopback token guards /api and /ws.
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-use btleplug::{
-    api::{Central as _, CentralEvent, Manager as _, Peripheral as _, RetrievePeripheralsOptions, ScanFilter},
-    platform::{Adapter, Manager, Peripheral},
-};
-use futures_util::StreamExt as _;
-use ulanzi_d100h::{ble::Client, Command, Message, Reply};
-use uuid::Uuid;
+mod ble;
+mod state;
+mod tray;
+mod web;
 
-// Confirmed vendor channel (firmware 1.3.8.1): service 1971, write fd01, notify fd00.
-// Service 2013 is the alternate Studio service.
-const SERVICE: Uuid = Uuid::from_u128(0x00001971_0000_1000_8000_00805f9b34fb);
-const SERVICE_ALT: Uuid = Uuid::from_u128(0x00002013_0000_1000_8000_00805f9b34fb);
-const WRITE: Uuid = Uuid::from_u128(0x0000fd01_0000_1000_8000_00805f9b34fb);
-const NOTIFY: Uuid = Uuid::from_u128(0x0000fd00_0000_1000_8000_00805f9b34fb);
+use std::collections::VecDeque;
+use std::sync::Arc;
 
-async fn find_dial(manager: &Manager) -> Result<Option<(Adapter, Peripheral)>, Box<dyn Error>> {
-    let services = vec![SERVICE, SERVICE_ALT];
-    for adapter in manager.adapters().await? {
-        // Peripherals the OS already reports as connected (e.g. paired via Settings).
-        for peripheral in adapter
-            .retrieve_peripherals(RetrievePeripheralsOptions {
-                services: Some(services.clone()),
-                ..Default::default()
-            })
-            .await?
-        {
-            return Ok(Some((adapter.clone(), peripheral)));
-        }
-        // Otherwise scan briefly for the Dial's advertised name or service.
-        adapter.start_scan(ScanFilter::default()).await?;
-        tokio::time::sleep(Duration::from_secs(5)).await;
-        adapter.stop_scan().await?;
-        for peripheral in adapter.peripherals().await? {
-            if let Some(props) = peripheral.properties().await? {
-                if props.local_name.as_deref() == Some("Ulanzi Dial")
-                    || props.services.iter().any(|s| services.contains(s))
-                {
-                    return Ok(Some((adapter.clone(), peripheral)));
-                }
-            }
-        }
-    }
-    Ok(None)
-}
+use tokio::sync::{RwLock, broadcast, mpsc, watch};
+
+use state::{AppState, BleRequest, UiStatus, generate_token};
+
+const DEFAULT_PORT: u16 = 17771;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
-    let manager = Manager::new().await?;
-    let Some((adapter, peripheral)) = find_dial(&manager).await? else {
-        return Err("No Dial found. Pair/connect it in Bluetooth settings first.".into());
+async fn main() {
+    let port = std::env::var("ULANZI_D100H_PORT")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(DEFAULT_PORT);
+    let token = generate_token();
+    let url = format!("http://127.0.0.1:{port}/?token={token}");
+
+    let (status_tx, _status_rx) = watch::channel(UiStatus::Scanning);
+    let (feed_tx, _feed_rx) = broadcast::channel(256);
+    let (ble_tx, ble_rx) = mpsc::unbounded_channel::<BleRequest>();
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+
+    let app = AppState {
+        status: status_tx,
+        device: Arc::new(RwLock::new(state::DeviceInfo::default())),
+        feed_tx,
+        feed: Arc::new(RwLock::new(VecDeque::new())),
+        ble_tx,
+        token: token.clone(),
+        shutdown: shutdown_tx,
     };
-    let id = peripheral.id();
-    let mut central_events = adapter.events().await?;
 
-    peripheral.connect().await?;
-    let result: Result<(), Box<dyn Error>> = async {
-        peripheral.discover_services().await?;
-        let characteristics = peripheral.characteristics();
-        let find = |uuid: Uuid| -> Result<_, Box<dyn Error>> {
-            characteristics
-                .iter()
-                .find(|c| c.uuid == uuid)
-                .cloned()
-                .ok_or_else(|| format!("Characteristic {uuid} not found").into())
-        };
-        let write = find(WRITE)?;
-        let notify = find(NOTIFY)?;
-        println!("Connected to {id}: write={} notify={}", write.uuid, notify.uuid);
+    // Windows tray icon on its own thread (Win32 message loop).
+    #[cfg(windows)]
+    tray::spawn(url.clone(), token.clone(), port);
 
-        let mut client = Client::attach(peripheral.clone(), write, notify).await?;
-        // Heartbeats are required: without them the Dial returns to standalone
-        // HID mode about three seconds after the last heartbeat.
-        client.send(Command::Heartbeat).await?;
-        let mut heartbeat = tokio::time::interval_at(
-            tokio::time::Instant::now() + Duration::from_secs(1),
-            Duration::from_secs(1),
-        );
-        heartbeat.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-        println!("Listening. Press Ctrl-C to stop.");
-        loop {
-            tokio::select! {
-                _ = heartbeat.tick() => client.send(Command::Heartbeat).await?,
-                message = client.next_message() => match message {
-                    Some(Ok(Message::Reply(Reply::Heartbeat))) => {}
-                    Some(Ok(message)) => println!("{message:?}"),
-                    Some(Err(error)) => eprintln!("Notification error: {error}"),
-                    None => break,
-                },
-                Some(event) = central_events.next() => {
-                    if matches!(event, CentralEvent::DeviceDisconnected(device) if device == id) {
-                        eprintln!("Device disconnected.");
-                        break;
-                    }
-                }
+    // axum on loopback.
+    let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+        Ok(listener) => listener,
+        Err(error) => {
+            eprintln!("cannot bind 127.0.0.1:{port}: {error}");
+            return;
+        }
+    };
+    let server = axum::serve(listener, web::router(app.clone()));
+
+    // BLE worker.
+    let ble_task = tokio::spawn(ble::run(app.clone(), ble_rx));
+
+    println!("ulanzi-d100h-soft listening on {url}");
+
+    let mut shutdown = shutdown_rx;
+    tokio::select! {
+        result = server => {
+            if let Err(error) = result {
+                eprintln!("server error: {error}");
             }
         }
-        Ok(())
+        _ = async { while !*shutdown.borrow() { if shutdown.changed().await.is_err() { break } } } => {}
     }
-    .await;
-
-    if peripheral.is_connected().await? {
-        peripheral.disconnect().await?;
-    }
-    result
+    ble_task.abort();
 }

@@ -1,0 +1,91 @@
+:root {
+  color-scheme: dark;
+  --bg: #101418;
+  --surface: #1a2027;
+  --border: #2a323c;
+  --fg: #dbe4ec;
+  --muted: #8a97a5;
+  --accent: #5ac8fa;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  font: 14px/1.5 system-ui, "Segoe UI", sans-serif;
+  background: var(--bg);
+  color: var(--fg);
+}
+header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 20px;
+  border-bottom: 1px solid var(--border);
+}
+h1 { font-size: 18px; margin: 0; }
+h2 { font-size: 14px; margin: 0 0 10px; color: var(--muted); text-transform: uppercase; letter-spacing: .05em; }
+
+.badge {
+  padding: 2px 10px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+}
+.badge[data-status="connected"] { color: #6fdc8c; border-color: #2c5; }
+.badge[data-status="disconnected"],
+.badge[data-status="scanning"] { color: #ffb454; border-color: #a62; }
+
+main {
+  display: grid;
+  grid-template-columns: minmax(260px, 340px) 1fr;
+  gap: 16px;
+  padding: 16px 20px;
+}
+@media (max-width: 700px) { main { grid-template-columns: 1fr; } }
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 14px 16px;
+}
+dl#device-info {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 14px;
+  margin: 0 0 12px;
+}
+dt { color: var(--muted); }
+dd { margin: 0; font-family: ui-monospace, Consolas, monospace; }
+
+button {
+  background: var(--surface);
+  color: var(--fg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+button:hover { border-color: var(--accent); color: var(--accent); }
+.queries { color: var(--muted); display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+
+#feed {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  font-family: ui-monospace, Consolas, monospace;
+  font-size: 13px;
+  max-height: 70vh;
+  overflow-y: auto;
+}
+#feed li {
+  display: flex;
+  gap: 12px;
+  padding: 3px 0;
+  border-bottom: 1px solid #20262e;
+}
+#feed time { color: var(--muted); flex: none; }
+.feed-event { color: var(--accent); }
+.feed-reply { color: #6fdc8c; }
+.feed-battery { color: #ffb454; }
+.feed-unknown { color: #d96; }
+.feed-status { color: var(--muted); font-style: italic; }
