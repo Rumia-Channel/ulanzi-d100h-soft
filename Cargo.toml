@@ -3,6 +3,10 @@ name = "ulanzi-d100h-soft"
 version = "0.1.0"
 edition = "2024"
 
+
+[workspace]
+members = ["crates/*"]
+
 [dependencies]
 btleplug = "0.13.5"
 futures-util = "0.3"
@@ -14,5 +18,8 @@ axum = { version = "0.8.9", features = ["ws"] }
 tokio-stream = { version = "0.1.19", features = ["sync"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
-windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Console"] }
+windows-sys = { version = "0.61.2", features = ["Win32_UI_WindowsAndMessaging", "Win32_System_Console", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_Foundation", "Win32_UI_Input_KeyboardAndMouse", "Win32_UI_Accessibility"] }
 getrandom = "0.4.3"
+dirs = "7.0.0"
+dial-core = { path = "crates/dial-core" }
+dial-win32 = { path = "crates/dial-win32" }

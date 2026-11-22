@@ -346,6 +346,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "dial-core"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "dial-win32"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+ "windows-sys",
+]
+
+[[package]]
 name = "digest"
 version = "0.10.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1905,6 +1921,9 @@ version = "0.1.0"
 dependencies = [
  "axum",
  "btleplug",
+ "dial-core",
+ "dial-win32",
+ "dirs",
  "futures-util",
  "getrandom 0.4.3",
  "serde",
