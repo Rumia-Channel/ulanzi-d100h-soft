@@ -383,6 +383,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "dial-usbip"
+version = "0.1.0"
+dependencies = [
+ "tokio",
+]
+
+[[package]]
 name = "dial-win32"
 version = "0.1.0"
 dependencies = [
@@ -2034,6 +2041,7 @@ dependencies = [
  "btleplug",
  "dial-core",
  "dial-linux",
+ "dial-usbip",
  "dial-win32",
  "dirs",
  "futures-util",

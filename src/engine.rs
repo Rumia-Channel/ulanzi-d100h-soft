@@ -7,6 +7,7 @@ use tokio::sync::{RwLock, broadcast, mpsc, watch};
 
 use crate::state::{AppState, EntryBody, EventInfo, FeedEntry};
 use crate::platform as process;
+use dial_usbip::SpeedEditor;
 /// Process table refresh cadence for running/not_running matches.
 const PROC_REFRESH: Duration = Duration::from_secs(2);
 
@@ -20,6 +21,10 @@ pub struct Engine {
     running: HashSet<String>,
     foreground: String,
     active: Option<usize>, // index into priority-sorted rules
+    /// Emulated Speed Editor (usbip) for `se:` commands; `None` off Windows.
+    speed_editor: Option<SpeedEditor>,
+    /// Timestamp of the last rotation event, for velocity-sensitive jog.
+    last_rotation: Option<std::time::Instant>,
 }
 
 impl Engine {
@@ -29,6 +34,7 @@ impl Engine {
         feed_rx: broadcast::Receiver<FeedEntry>,
         focus_rx: mpsc::UnboundedReceiver<String>,
         config: Arc<RwLock<Config>>,
+        speed_editor: Option<SpeedEditor>,
     ) -> Self {
         Self {
             state,
@@ -39,6 +45,8 @@ impl Engine {
             running: HashSet::new(),
             foreground: String::new(),
             active: None,
+            speed_editor,
+            last_rotation: None,
         }
     }
 
@@ -135,7 +143,7 @@ impl Engine {
         }
     }
 
-    async fn on_entry(&self, entry: FeedEntry) {
+    async fn on_entry(&mut self, entry: FeedEntry) {
         let EntryBody::Event(event) = entry.body else {
             return;
         };
@@ -149,6 +157,18 @@ impl Engine {
         let Some(input) = input_id(&event) else {
             return;
         };
+        // Velocity estimate for the jog: counts per tick scale with how
+        // fast ticks arrive, like the Speed Editor's own encoder.
+        let mut jog_scale = 1i32;
+        if let EventInfo::Rotation { .. } = event {
+            let now = std::time::Instant::now();
+            if let Some(prev) = self.last_rotation {
+                let dt_ms = now.duration_since(prev).as_millis() as f32;
+                // ~17 counts/tick at 14ms, 1 count at ~4s+ pauses.
+                jog_scale = ((0.25 / dt_ms.max(0.001) * 1000.0).round() as i32).clamp(1, 256);
+            }
+            self.last_rotation = Some(now);
+        }
         // Resolve the action under the lock, drop it, then act — keeps the
         // future Send and the lock hold short.
         let action = {
@@ -166,13 +186,52 @@ impl Engine {
             Action::Wheel { notches, horizontal, modifiers } => {
                 process::send_wheel(&modifiers, notches, horizontal).map_err(|e| e.to_string())
             }
-            Action::Command { name } => Err(format!("command action \"{name}\" not implemented")),
+            Action::Command { name } => self.run_command(&name, input, jog_scale).await,
         };
         if let Err(detail) = result {
             let status = *self.state.status.borrow();
             self.state
                 .push_entry(EntryBody::Status { status, detail: Some(format!("{}: {detail}", input.id())) })
                 .await;
+        }
+    }
+
+    /// Named command actions dispatched through the emulated Speed Editor.
+    /// "se:jog" feeds rotation into the wheel; "se:key:<name>" taps a
+    /// transport key. Anything else returns an error so it surfaces in
+    /// the feed.
+    async fn run_command(&self, name: &str, input: InputId, jog_scale: i32) -> Result<(), String> {
+        let Some(se) = &self.speed_editor else {
+            return Err(format!("command action \"{name}\" unavailable (no Speed Editor)"));
+        };
+        match name {
+            "se:jog" => {
+                let ticks = match input {
+                    InputId::RotateCw | InputId::RotateHeldCw => 1,
+                    InputId::RotateCcw | InputId::RotateHeldCcw => -1,
+                    _ => 0,
+                };
+                if ticks == 0 {
+                    return Err(format!("se:jog bound to non-rotation input {}", input.id()));
+                }
+                if !se.authenticated() {
+                    return Err("se:jog: Speed Editor not authenticated".into());
+                }
+                se.queue_jog(ticks, jog_scale);
+                Ok(())
+            }
+            _ if name.starts_with("se:key:") => {
+                let key_name = &name[7..];
+                let Some(code) = dial_usbip::key_by_name(key_name) else {
+                    return Err(format!("se:key: unknown key \"{key_name}\""));
+                };
+                if !se.authenticated() {
+                    return Err("se:key: Speed Editor not authenticated".into());
+                }
+                se.tap_key(code);
+                Ok(())
+            }
+            _ => Err(format!("command action \"{name}\" not implemented")),
         }
     }
 }

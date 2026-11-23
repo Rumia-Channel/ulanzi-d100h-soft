@@ -20,6 +20,7 @@ serde_json = "1.0.154"
 getrandom = "0.4.3"
 dirs = "7.0.0"
 dial-core = { path = "crates/dial-core" }
+dial-usbip = { path = "crates/dial-usbip" }
 
 [target.'cfg(windows)'.dependencies]
 dial-win32 = { path = "crates/dial-win32" }

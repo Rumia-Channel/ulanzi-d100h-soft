@@ -10,6 +10,8 @@ mod platform;
 mod state;
 #[cfg(windows)]
 mod tray;
+#[cfg(windows)]
+mod usbip_ctl;
 mod web;
 
 use std::collections::VecDeque;
@@ -75,12 +77,19 @@ async fn main() {
     // BLE worker + rule engine + foreground watcher.
     let ble_task = tokio::spawn(ble::run(app.clone(), ble_rx));
     let focus_rx = platform::focus_events();
+    // Emulated Speed Editor for Resolve jog/wheel commands (usbip-win2,
+    // Windows only for now - usbip_ctl is win32-specific).
+    #[cfg(windows)]
+    let speed_editor = Some(usbip_ctl::run(shutdown_rx.clone()));
+    #[cfg(not(windows))]
+    let speed_editor = None::<dial_usbip::SpeedEditor>;
     let engine = engine::Engine::new(
         app.clone(),
         reload_rx,
         app.feed_tx.subscribe(),
         focus_rx,
         config,
+        speed_editor,
     );
     let engine_task = tokio::spawn(engine.run());
 
