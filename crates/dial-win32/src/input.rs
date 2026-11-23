@@ -6,7 +6,7 @@ use windows_sys::Win32::{
         Input::KeyboardAndMouse::{
             GetKeyboardLayout, HKL, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
             KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC_EX, MOUSEEVENTF_HWHEEL,
-            MOUSEEVENTF_WHEEL, MOUSEINPUT, MapVirtualKeyW, SendInput, VkKeyScanExW,
+            MOUSEEVENTF_WHEEL, MOUSEINPUT, MapVirtualKeyExW, SendInput, VkKeyScanExW,
         },
         WindowsAndMessaging::{GetForegroundWindow, GetWindowThreadProcessId},
     },
@@ -108,10 +108,28 @@ fn foreground_layout() -> HKL {
     }
 }
 
-/// VKs to hold for one key: a character may need Shift/Ctrl/Alt on top.
-fn key_vks(key: Key, layout: HKL) -> Option<Vec<u16>> {
+/// A VK plus whether it is the extended (E0) variant of a shared VK, e.g.
+/// numpad Enter is VK_RETURN + extended.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Stroke {
+    vk: u16,
+    extended: bool,
+}
+
+impl Stroke {
+    fn plain(vk: u16) -> Self {
+        Self { vk, extended: false }
+    }
+
+    fn named(key: Named) -> Self {
+        Self { vk: named_vk(key), extended: key == Named::NumpadEnter }
+    }
+}
+
+/// Strokes to hold for one key: a character may need Shift/Ctrl/Alt on top.
+fn key_strokes(key: Key, layout: HKL) -> Option<Vec<Stroke>> {
     match key {
-        Key::Named(named) => Some(vec![named_vk(named)]),
+        Key::Named(named) => Some(vec![Stroke::named(named)]),
         Key::Char(c) => {
             let mut buf = [0u16; 2];
             let [unit] = c.encode_utf16(&mut buf) else {
@@ -123,18 +141,18 @@ fn key_vks(key: Key, layout: HKL) -> Option<Vec<u16>> {
             }
             let vk = (scan as u16) & 0xFF;
             let shift_state = ((scan as u16) >> 8) & 0xFF;
-            let mut vks = Vec::with_capacity(4);
+            let mut strokes = Vec::with_capacity(4);
             if shift_state & 1 != 0 {
-                vks.push(named_vk(Named::Shift));
+                strokes.push(Stroke::named(Named::Shift));
             }
             if shift_state & 2 != 0 {
-                vks.push(named_vk(Named::Ctrl));
+                strokes.push(Stroke::named(Named::Ctrl));
             }
             if shift_state & 4 != 0 {
-                vks.push(named_vk(Named::Alt));
+                strokes.push(Stroke::named(Named::Alt));
             }
-            vks.push(vk);
-            Some(vks)
+            strokes.push(Stroke::plain(vk));
+            Some(strokes)
         }
     }
 }
@@ -145,14 +163,14 @@ fn key_vks(key: Key, layout: HKL) -> Option<Vec<u16>> {
 pub fn send_keys(names: &[String]) -> Result<(), InjectError> {
     let keys = parse_chord(names).map_err(InjectError::UnknownKeys)?;
     let layout = foreground_layout();
-    let mut codes: Vec<u16> = Vec::with_capacity(keys.len());
+    let mut strokes: Vec<Stroke> = Vec::with_capacity(keys.len());
     let mut unmappable = Vec::new();
     for (key, name) in keys.into_iter().zip(names) {
-        match key_vks(key, layout) {
-            Some(vks) => {
-                for vk in vks {
-                    if !codes.contains(&vk) {
-                        codes.push(vk);
+        match key_strokes(key, layout) {
+            Some(more) => {
+                for stroke in more {
+                    if !strokes.contains(&stroke) {
+                        strokes.push(stroke);
                     }
                 }
             }
@@ -162,12 +180,12 @@ pub fn send_keys(names: &[String]) -> Result<(), InjectError> {
     if !unmappable.is_empty() {
         return Err(InjectError::Unmappable(unmappable));
     }
-    if codes.is_empty() {
+    if strokes.is_empty() {
         return Ok(());
     }
-    let mut inputs: Vec<INPUT> = Vec::with_capacity(codes.len() * 2);
-    inputs.extend(codes.iter().map(|&vk| key_input(vk, false)));
-    inputs.extend(codes.iter().rev().map(|&vk| key_input(vk, true)));
+    let mut inputs: Vec<INPUT> = Vec::with_capacity(strokes.len() * 2);
+    inputs.extend(strokes.iter().map(|&s| key_input(s, false, layout)));
+    inputs.extend(strokes.iter().rev().map(|&s| key_input(s, true, layout)));
     send(&inputs)
 }
 
@@ -178,16 +196,17 @@ pub fn send_wheel(modifiers: &[String], notches: i32, horizontal: bool) -> Resul
     if notches == 0 {
         return Ok(());
     }
-    let mut vks: Vec<u16> = Vec::with_capacity(mods.len());
-    for vk in mods.into_iter().map(named_vk) {
-        if !vks.contains(&vk) {
-            vks.push(vk);
+    let layout = foreground_layout();
+    let mut strokes: Vec<Stroke> = Vec::with_capacity(mods.len());
+    for stroke in mods.into_iter().map(Stroke::named) {
+        if !strokes.contains(&stroke) {
+            strokes.push(stroke);
         }
     }
-    let mut inputs: Vec<INPUT> = Vec::with_capacity(vks.len() * 2 + 1);
-    inputs.extend(vks.iter().map(|&vk| key_input(vk, false)));
+    let mut inputs: Vec<INPUT> = Vec::with_capacity(strokes.len() * 2 + 1);
+    inputs.extend(strokes.iter().map(|&s| key_input(s, false, layout)));
     inputs.push(wheel_input(notches.saturating_mul(WHEEL_DELTA), horizontal));
-    inputs.extend(vks.iter().rev().map(|&vk| key_input(vk, true)));
+    inputs.extend(strokes.iter().rev().map(|&s| key_input(s, true, layout)));
     send(&inputs)
 }
 
@@ -208,15 +227,17 @@ fn is_extended(vk: u16) -> bool {
         | 0x25 | 0x26 | 0x27 | 0x28 | 0x6F | 0xAF | 0xAE | 0xAD | 0xB0 | 0xB1 | 0xB2 | 0xB3)
 }
 
-fn key_input(vk: u16, up: bool) -> INPUT {
+fn key_input(stroke: Stroke, up: bool, layout: HKL) -> INPUT {
+    let Stroke { vk, extended } = stroke;
     // Fill the hardware scan code too: apps that read lParam's scan code
-    // (or map by physical key) ignore events whose scan code is 0.
-    let scan_ex = unsafe { MapVirtualKeyW(u32::from(vk), MAPVK_VK_TO_VSC_EX) };
+    // (or map by physical key) ignore events whose scan code is 0. Map it with
+    // the target's layout, the same one characters were resolved against.
+    let scan_ex = unsafe { MapVirtualKeyExW(u32::from(vk), MAPVK_VK_TO_VSC_EX, layout) };
     let mut flags = 0u32;
     if up {
         flags |= KEYEVENTF_KEYUP;
     }
-    if is_extended(vk) || matches!(scan_ex >> 8, 0xE0 | 0xE1) {
+    if extended || is_extended(vk) || matches!(scan_ex >> 8, 0xE0 | 0xE1) {
         flags |= KEYEVENTF_EXTENDEDKEY;
     }
     INPUT {
