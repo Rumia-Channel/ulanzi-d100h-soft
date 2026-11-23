@@ -427,11 +427,11 @@ impl SpeedEditor {
                 // GET_DESCRIPTOR
                 0x06 if dir_in => {
                     let dtype = (value >> 8) as u8;
-                    let _dindex = (value & 0xff) as u8;
+                    let dindex = (value & 0xff) as u8;
                     return match dtype {
                         0x01 => ControlReply::Data(DEVICE_DESCRIPTOR.to_vec()),
                         0x02 => ControlReply::Data(configuration_descriptor().to_vec()),
-                        0x03 => string_descriptor(index as u8).map(ControlReply::Data).unwrap_or(ControlReply::Stall),
+                        0x03 => string_descriptor(dindex).map(ControlReply::Data).unwrap_or(ControlReply::Stall),
                         0x22 => ControlReply::Data(REPORT_DESCRIPTOR.to_vec()),
                         _ => ControlReply::Stall,
                     };

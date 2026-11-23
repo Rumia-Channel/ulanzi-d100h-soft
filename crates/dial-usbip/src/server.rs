@@ -22,10 +22,11 @@ const OP_REP_DEVLIST: u16 = 0x0005;
 const OP_REQ_IMPORT: u16 = 0x8003;
 const OP_REP_IMPORT: u16 = 0x0003;
 
-// usbip commands
+// usbip commands (USBIP_CMD_SUBMIT/UNLINK/RET_SUBMIT/RET_UNLINK)
 const CMD_SUBMIT: u32 = 1;
 const CMD_UNLINK: u32 = 2;
 const RET_SUBMIT: u32 = 3;
+const RET_UNLINK: u32 = 4;
 const ST_OK: u32 = 0;
 const ST_STALL: u32 = 0x01;
 const ST_NODEV: u32 = 0x04;
@@ -129,7 +130,9 @@ async fn serve_connection(socket: TcpStream, device: SpeedEditor) -> io::Result<
                 out.extend_from_slice(&encode_device_info());
                 socket.write_all(&out).await?;
                 eprintln!("usbip: 1-1 imported");
+                device.attach();
                 let result = urb_loop(socket, device.clone()).await;
+                eprintln!("usbip: urb loop exited: {result:?}");
                 device.detach();
                 return result;
             }
@@ -153,23 +156,27 @@ async fn send_op_reply(socket: &mut TcpStream, code: u16, status: u32) -> io::Re
     socket.write_all(&out).await
 }
 
-// URB header: 48 bytes. Fields after seqnum are big-endian except the
-// setup packet and the payload, which keep wire order.
+// usbip_header: 48 bytes. usbip_header_basic (20B) then command-specific
+// fields; all 32-bit fields are big-endian. Setup is 8 wire bytes.
 fn read_urb_header(buf: &[u8; 48]) -> (u32, u32, u32, u32, u32, u64) {
     let command = u32::from_be_bytes(buf[0..4].try_into().unwrap());
     let seqnum = u32::from_be_bytes(buf[4..8].try_into().unwrap());
-    // buf[8..24] is devid/busid/secnum padding - ignored
-    let direction = u32::from_be_bytes(buf[24..28].try_into().unwrap());
-    let ep = u32::from_be_bytes(buf[28..32].try_into().unwrap());
-    let transfer_buffer_length = u32::from_be_bytes(buf[36..40].try_into().unwrap());
-    let setup = u64::from_le_bytes(buf[40..48].try_into().unwrap());
+    let direction = u32::from_be_bytes(buf[0x0c..0x10].try_into().unwrap());
+    let ep = u32::from_be_bytes(buf[0x10..0x14].try_into().unwrap());
+    let transfer_buffer_length = u32::from_be_bytes(buf[0x18..0x1c].try_into().unwrap());
+    let setup = u64::from_le_bytes(buf[0x28..0x30].try_into().unwrap());
     (command, seqnum, direction, ep, transfer_buffer_length, setup)
 }
 
-fn urb_reply_header(seqnum: u32) -> [u8; 48] {
+/// 48-byte RET_SUBMIT header: command/seqnum at 0/4, status at 0x14,
+/// actual_length at 0x18, rest zero.
+fn urb_reply_header(seqnum: u32, status: u32, actual: u32) -> [u8; 48] {
     let mut h = [0u8; 48];
     h[0..4].copy_from_slice(&RET_SUBMIT.to_be_bytes());
     h[4..8].copy_from_slice(&seqnum.to_be_bytes());
+    h[0x14..0x18].copy_from_slice(&status.to_be_bytes());
+    h[0x18..0x1c].copy_from_slice(&actual.to_be_bytes());
+    h[0x20..0x24].copy_from_slice(&0xffff_ffffu32.to_be_bytes()); // number_of_packets
     h
 }
 
@@ -180,11 +187,7 @@ async fn write_ret_submit(
     payload: &[u8],
 ) -> io::Result<()> {
     let mut out = Vec::with_capacity(48 + payload.len());
-    out.extend_from_slice(&urb_reply_header(seqnum));
-    out[24..28].copy_from_slice(&DIR_IN.to_be_bytes());
-    out[28..32].copy_from_slice(&0u32.to_be_bytes()); // ep
-    out[32..36].copy_from_slice(&status.to_be_bytes());
-    out[36..40].copy_from_slice(&(payload.len() as u32).to_be_bytes());
+    out.extend_from_slice(&urb_reply_header(seqnum, status, payload.len() as u32));
     out.extend_from_slice(payload);
     write.write_all(&out).await
 }
@@ -199,14 +202,17 @@ async fn urb_loop(socket: TcpStream, device: SpeedEditor) -> io::Result<()> {
     let reader = tokio::spawn(async move {
         loop {
             let mut header = [0u8; 48];
-            if read.read_exact(&mut header).await.is_err() {
-                return;
+            match read.read_exact(&mut header).await {
+                Ok(_) => {}
+                Err(e) => { eprintln!("urb reader eof/err: {e}"); return; }
             }
             let (command, seqnum, direction, ep, len, setup) = read_urb_header(&header);
+            eprintln!("urb hdr: cmd={command:#x} seq={seqnum} dir={direction} ep={ep:#x} len={len} raw={:02x?}", &header[..16]);
             match command {
                 CMD_SUBMIT => {
                     let mut payload = vec![0u8; len as usize];
                     if direction == DIR_OUT && len > 0 && read.read_exact(&mut payload).await.is_err() {
+                        eprintln!("urb reader payload err seq={seqnum}");
                         return;
                     }
                     if urb_tx.send(Urb::Submit { seqnum, direction, ep, setup, payload }).is_err() {
@@ -214,16 +220,13 @@ async fn urb_loop(socket: TcpStream, device: SpeedEditor) -> io::Result<()> {
                     }
                 }
                 CMD_UNLINK => {
-                    let mut target = [0u8; 4];
-                    if read.read_exact(&mut target).await.is_err() {
-                        return;
-                    }
-                    let t = u32::from_be_bytes(target);
-                    if urb_tx.send(Urb::Unlink { seqnum, target: t }).is_err() {
+                    // unlink target seqnum is embedded at header offset 0x14
+                    let target = u32::from_be_bytes(header[0x14..0x18].try_into().unwrap());
+                    if urb_tx.send(Urb::Unlink { seqnum, target }).is_err() {
                         return;
                     }
                 }
-                _ => return,
+                other => { eprintln!("urb reader: unknown cmd {other}"); return; }
             }
         }
     });
@@ -253,20 +256,34 @@ async fn urb_loop(socket: TcpStream, device: SpeedEditor) -> io::Result<()> {
                     }
                     write_ret_submit(&mut write, seqnum, 0, &[]).await?;
                 } else {
-                    // Control IN (ep 0, dir in)
+                    // Control IN (ep 0, dir in). wLength caps the reply:
+                    // sending more than the host asked fails the URB.
+                    let wlen = ((setup >> 48) & 0xffff) as usize;
                     match device.control(setup, &[]) {
-                        ControlReply::Data(d) => write_ret_submit(&mut write, seqnum, 0, &d).await?,
-                        ControlReply::Stall => write_ret_submit(&mut write, seqnum, ST_STALL, &[]).await?,
+                        ControlReply::Data(d) => {
+                            let d = &d[..d.len().min(wlen)];
+                            eprintln!("ctrl in seq={seqnum} setup={setup:016x} -> {}B", d.len());
+                            write_ret_submit(&mut write, seqnum, 0, d).await?
+                        }
+                        ControlReply::Stall => {
+                            eprintln!("ctrl in seq={seqnum} setup={setup:016x} -> STALL");
+                            write_ret_submit(&mut write, seqnum, ST_STALL, &[]).await?
+                        }
                     }
                 }
             }
             Urb::Unlink { seqnum, target } => {
-                if pending_in.remove(&target).is_some() {
-                    in_queue.retain(|&s| s != target);
-                    write_ret_submit(&mut write, seqnum, 0, &[]).await?;
-                } else {
-                    write_ret_submit(&mut write, seqnum, ST_NODEV, &[]).await?;
-                }
+                let had = pending_in.remove(&target).is_some();
+                in_queue.retain(|&s| s != target);
+                // RET_UNLINK (0x04): -ECONNRESET when we actually cancelled
+                let mut out = Vec::with_capacity(48);
+                let mut h = [0u8; 48];
+                h[0..4].copy_from_slice(&RET_UNLINK.to_be_bytes());
+                h[4..8].copy_from_slice(&seqnum.to_be_bytes());
+                let st: u32 = if had { (-104i32) as u32 } else { 0 };
+                h[0x14..0x18].copy_from_slice(&st.to_be_bytes());
+                out.extend_from_slice(&h);
+                write.write_all(&out).await?;
             }
         }
 
@@ -317,9 +334,9 @@ mod tests {
         let mut buf = [0u8; 48];
         buf[0..4].copy_from_slice(&CMD_SUBMIT.to_be_bytes());
         buf[4..8].copy_from_slice(&7u32.to_be_bytes());
-        buf[24..28].copy_from_slice(&DIR_IN.to_be_bytes());
-        buf[28..32].copy_from_slice(&1u32.to_be_bytes());
-        buf[36..40].copy_from_slice(&64u32.to_be_bytes());
+        buf[0x0c..0x10].copy_from_slice(&DIR_IN.to_be_bytes());
+        buf[0x10..0x14].copy_from_slice(&1u32.to_be_bytes());
+        buf[0x18..0x1c].copy_from_slice(&64u32.to_be_bytes());
         let (cmd, seq, dir, ep, len, _setup) = read_urb_header(&buf);
         assert_eq!(cmd, CMD_SUBMIT);
         assert_eq!(seq, 7);
