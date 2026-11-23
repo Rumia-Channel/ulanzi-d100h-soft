@@ -70,6 +70,9 @@ export function eventInputId(e) {
       ? (e.direction === "Clockwise" ? "rotate_held_cw" : "rotate_held_ccw")
       : (e.direction === "Clockwise" ? "rotate_cw" : "rotate_ccw");
   if (e.event === "knob_click") return "knob_click";
-  if (e.event === "button") return "button_" + e.button;
+  // Backend sends button names in PascalCase ("TopLeft"); input ids are
+  // snake_case ("button_top_left").
+  if (e.event === "button")
+    return "button_" + e.button.replace(/([a-z0-9])([A-Z])/g, "$1_$2").toLowerCase();
   return null;
 }

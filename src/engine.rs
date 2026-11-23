@@ -1,8 +1,8 @@
 //! Action engine: watches the dial-event feed plus foreground/process sources,
-//! resolves the active rule via dial-core, and executes bindings (SendInput).
+//! resolves the active rule via dial-core, and executes bindings (key chords / mouse wheel via SendInput).
 use std::{collections::HashSet, sync::Arc, time::Duration};
 
-use dial_core::{Action, Config, InputId, World, active_rule};
+use dial_core::{Action, Config, InputId, Rule, World, active_rule};
 use tokio::sync::{RwLock, broadcast, mpsc, watch};
 
 use crate::state::{AppState, EntryBody, EventInfo, FeedEntry};
@@ -47,12 +47,28 @@ impl Engine {
         self.reconcile().await;
         let mut proc_tick = tokio::time::interval(PROC_REFRESH);
         proc_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut lagged = 0u64;
 
         loop {
             tokio::select! {
                 entry = self.feed_rx.recv() => match entry {
-                    Ok(entry) => self.on_entry(entry).await,
-                    Err(broadcast::error::RecvError::Lagged(_)) => {}
+                    Ok(entry) => {
+                        self.on_entry(entry).await;
+                        // Report only once a slot has been consumed: pushing
+                        // into the still-full channel right after `Lagged`
+                        // would evict our next unread entry and lag again.
+                        if lagged > 0 {
+                            let status = *self.state.status.borrow();
+                            self.state
+                                .push_entry(EntryBody::Status {
+                                    status,
+                                    detail: Some(format!("engine lagged: {lagged} feed entries dropped")),
+                                })
+                                .await;
+                            lagged = 0;
+                        }
+                    }
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => lagged += skipped,
                     Err(broadcast::error::RecvError::Closed) => return,
                 },
                 name = self.focus_rx.recv() => match name {
@@ -139,36 +155,37 @@ impl Engine {
             let config = self.config.read().await;
             self.active
                 .and_then(|i| config.rules.get(i))
-                .and_then(|r| r.bindings.iter().find(|b| b.input == input))
-                .map(|b| b.action.clone())
+                .and_then(|rule| binding_action(rule, input))
         };
         let Some(action) = action else {
             return;
         };
-        let status = *self.state.status.borrow();
-        match action {
-            Action::None => {}
-            Action::Keys { keys } => {
-                let rejected = process::send_keys(&keys);
-                if !rejected.is_empty() {
-                    self.state
-                        .push_entry(EntryBody::Status {
-                            status,
-                            detail: Some(format!("unknown key name(s): {}", rejected.join(", "))),
-                        })
-                        .await;
-                }
+        let result = match action {
+            Action::None => Ok(()),
+            Action::Keys { keys } => process::send_keys(&keys).map_err(|e| e.to_string()),
+            Action::Wheel { notches, horizontal, modifiers } => {
+                process::send_wheel(&modifiers, notches, horizontal).map_err(|e| e.to_string())
             }
-            Action::Command { name } => {
-                self.state
-                    .push_entry(EntryBody::Status {
-                        status,
-                        detail: Some(format!("command action \"{name}\" not implemented")),
-                    })
-                    .await;
-            }
+            Action::Command { name } => Err(format!("command action \"{name}\" not implemented")),
+        };
+        if let Err(detail) = result {
+            let status = *self.state.status.borrow();
+            self.state
+                .push_entry(EntryBody::Status { status, detail: Some(format!("{}: {detail}", input.id())) })
+                .await;
         }
     }
+}
+
+/// Action bound to `input`. Knob-held rotation without its own binding falls
+/// back to the plain rotation binding, so turning while pressed still works.
+fn binding_action(rule: &Rule, input: InputId) -> Option<Action> {
+    let find = |id: InputId| rule.bindings.iter().find(|b| b.input == id).map(|b| b.action.clone());
+    find(input).or_else(|| match input {
+        InputId::RotateHeldCw => find(InputId::RotateCw),
+        InputId::RotateHeldCcw => find(InputId::RotateCcw),
+        _ => None,
+    })
 }
 
 fn input_id(event: &EventInfo) -> Option<InputId> {

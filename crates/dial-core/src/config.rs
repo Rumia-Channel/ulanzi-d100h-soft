@@ -13,6 +13,16 @@ pub enum Action {
     /// Press a key chord, e.g. ["ctrl","alt","k"] or single ["j"].
     /// Key names are resolved by the platform layer (SendInput).
     Keys { keys: Vec<String> },
+    /// Mouse-wheel notches with optional modifiers held, e.g. alt+wheel for
+    /// timeline zoom. Positive = up (vertical) / right (horizontal).
+    Wheel {
+        #[serde(default = "default_notches")]
+        notches: i32,
+        #[serde(default)]
+        horizontal: bool,
+        #[serde(default)]
+        modifiers: Vec<String>,
+    },
     /// Named action for future built-in commands.
     Command { name: String },
 }
@@ -62,6 +72,10 @@ fn default_enabled() -> bool {
     true
 }
 
+fn default_notches() -> i32 {
+    1
+}
+
 impl Default for Config {
     fn default() -> Self {
         Self {
@@ -88,6 +102,30 @@ impl Config {
         let mut config = self.clone();
         config.sort();
         serde_json::to_string_pretty(&config)
+    }
+
+    /// Reject bindings the engine could not execute (unknown key names,
+    /// non-modifier wheel modifiers, zero notches).
+    pub fn validate(&self) -> Result<(), String> {
+        for rule in &self.rules {
+            for binding in &rule.bindings {
+                let problem = match &binding.action {
+                    Action::Keys { keys } if keys.is_empty() => Some("empty key chord".to_string()),
+                    Action::Keys { keys } => crate::keys::parse_chord(keys)
+                        .err()
+                        .map(|bad| format!("unknown key name(s): {}", bad.join(", "))),
+                    Action::Wheel { notches: 0, .. } => Some("wheel notches must not be 0".to_string()),
+                    Action::Wheel { modifiers, .. } => crate::keys::parse_modifiers(modifiers)
+                        .err()
+                        .map(|bad| format!("not a modifier key: {}", bad.join(", "))),
+                    Action::None | Action::Command { .. } => None,
+                };
+                if let Some(problem) = problem {
+                    return Err(format!("rule \"{}\", {}: {problem}", rule.name, binding.input.id()));
+                }
+            }
+        }
+        Ok(())
     }
 
     /// Canonical order: highest priority first.

@@ -2,10 +2,11 @@
 name = "dial-win32"
 version = "0.1.0"
 edition = "2024"
-description = "Windows process/focus detection and key injection for ulanzi-d100h-soft"
+description = "Windows process/focus detection and key/wheel injection for ulanzi-d100h-soft"
 license = "MIT"
 
 [dependencies]
+dial-core = { path = "../dial-core" }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_System_Diagnostics_ToolHelp",

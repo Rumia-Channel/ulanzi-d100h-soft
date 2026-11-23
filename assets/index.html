@@ -135,11 +135,27 @@
               <option value="none">none</option>
               <option value="keys">key chord</option>
               <option value="command">command</option>
+              <option value="wheel">mouse wheel</option>
             </select>
           </div>
           <div class="field">
             <span class="field-label">value</span>
             <input id="act-value" type="text" placeholder="e.g. ctrl+alt+j">
+          </div>
+          <div id="wheel-opts" hidden>
+            <div class="field">
+              <span class="field-label">notches</span>
+              <input id="wheel-notches" type="number" step="1">
+            </div>
+            <div class="field">
+              <span class="field-label">axis</span>
+              <input id="wheel-horizontal" type="checkbox">
+              <label for="wheel-horizontal">horizontal</label>
+            </div>
+            <div class="field">
+              <span class="field-label">modifiers</span>
+              <input id="wheel-mods" type="text" placeholder="modifiers, e.g. alt or ctrl+shift">
+            </div>
           </div>
         </div>
         <p id="insp-hint" class="hint">Click a button ring segment, the knob, or a rotation chip on the left.</p>
