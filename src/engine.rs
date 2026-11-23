@@ -47,20 +47,28 @@ impl Engine {
         self.reconcile().await;
         let mut proc_tick = tokio::time::interval(PROC_REFRESH);
         proc_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut lagged = 0u64;
 
         loop {
             tokio::select! {
                 entry = self.feed_rx.recv() => match entry {
-                    Ok(entry) => self.on_entry(entry).await,
-                    Err(broadcast::error::RecvError::Lagged(skipped)) => {
-                        let status = *self.state.status.borrow();
-                        self.state
-                            .push_entry(EntryBody::Status {
-                                status,
-                                detail: Some(format!("engine lagged: {skipped} feed entries dropped")),
-                            })
-                            .await;
+                    Ok(entry) => {
+                        self.on_entry(entry).await;
+                        // Report only once a slot has been consumed: pushing
+                        // into the still-full channel right after `Lagged`
+                        // would evict our next unread entry and lag again.
+                        if lagged > 0 {
+                            let status = *self.state.status.borrow();
+                            self.state
+                                .push_entry(EntryBody::Status {
+                                    status,
+                                    detail: Some(format!("engine lagged: {lagged} feed entries dropped")),
+                                })
+                                .await;
+                            lagged = 0;
+                        }
                     }
+                    Err(broadcast::error::RecvError::Lagged(skipped)) => lagged += skipped,
                     Err(broadcast::error::RecvError::Closed) => return,
                 },
                 name = self.focus_rx.recv() => match name {
