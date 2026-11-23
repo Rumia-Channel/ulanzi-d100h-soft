@@ -6,7 +6,7 @@ use dial_core::{Action, Config, InputId, Rule, World, active_rule};
 use tokio::sync::{RwLock, broadcast, mpsc, watch};
 
 use crate::state::{AppState, EntryBody, EventInfo, FeedEntry};
-use dial_win32 as process;
+use crate::platform as process;
 /// Process table refresh cadence for running/not_running matches.
 const PROC_REFRESH: Duration = Duration::from_secs(2);
 
@@ -80,7 +80,7 @@ impl Engine {
                             self.state
                                 .push_entry(EntryBody::Status {
                                     status,
-                                    detail: Some(format!("foreground: {name}")),
+                                    detail: Some(format!("foreground: {}", if name.is_empty() { "none" } else { &name })),
                                 })
                                 .await;
                             self.reconcile().await;

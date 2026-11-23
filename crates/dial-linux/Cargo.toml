@@ -1,0 +1,13 @@
+[package]
+name = "dial-linux"
+version = "0.1.0"
+edition = "2024"
+description = "Linux process/focus detection and key/wheel injection (XTEST or uinput) for ulanzi-d100h-soft"
+license = "MIT"
+
+[dependencies]
+dial-core = { path = "../dial-core" }
+evdev = "0.13"
+x11rb = { version = "0.13", features = ["xkb", "xtest"] }
+tokio = { version = "1", features = ["sync"] }
+xkeysym = "0.2.1"

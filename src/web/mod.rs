@@ -188,7 +188,7 @@ async fn api_processes(
     if !authorized(&state, &q.token) {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    let mut names: Vec<String> = tokio::task::spawn_blocking(dial_win32::running_processes)
+    let mut names: Vec<String> = tokio::task::spawn_blocking(crate::platform::running_processes)
         .await
         .map(|set| set.into_iter().collect())
         .unwrap_or_default();
