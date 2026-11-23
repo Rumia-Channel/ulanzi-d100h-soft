@@ -92,17 +92,19 @@ fn watch(tx: &mpsc::UnboundedSender<String>) -> Result<(), String> {
     )
     .map_err(|e| e.to_string())?;
     conn.flush().map_err(|e| e.to_string())?;
-    let mut last = None;
+    let mut last = String::new();
     loop {
         match conn
             .wait_for_event()
             .map_err(|e| format!("X11 connection lost: {e}"))?
         {
             Event::PropertyNotify(event) if event.atom == atoms.active_window => {
-                let name = active_process(&conn, root, &atoms);
-                if name.is_some() && name != last {
+                // No active window (or an unresolvable one) is reported as ""
+                // so rules fall back instead of keeping the last app's.
+                let name = active_process(&conn, root, &atoms).unwrap_or_default();
+                if name != last {
                     last.clone_from(&name);
-                    let _ = tx.send(name.unwrap_or_default());
+                    let _ = tx.send(name);
                 }
             }
             _ => {}

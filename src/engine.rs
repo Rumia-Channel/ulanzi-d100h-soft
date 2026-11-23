@@ -80,7 +80,7 @@ impl Engine {
                             self.state
                                 .push_entry(EntryBody::Status {
                                     status,
-                                    detail: Some(format!("foreground: {name}")),
+                                    detail: Some(format!("foreground: {}", if name.is_empty() { "none" } else { &name })),
                                 })
                                 .await;
                             self.reconcile().await;
