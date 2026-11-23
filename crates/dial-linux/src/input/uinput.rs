@@ -219,7 +219,7 @@ fn axis_event(axis: RelativeAxisCode, value: i32) -> InputEvent {
 
 /// evdev key code for a named key; `None` only for out-of-range values
 /// (`F(25)`, `Numpad(10)`, non-ASCII `Alnum`).
-fn named_code(key: Named) -> Option<KeyCode> {
+pub(super) fn named_code(key: Named) -> Option<KeyCode> {
     Some(match key {
         Named::Ctrl => KeyCode::KEY_LEFTCTRL,
         Named::RCtrl => KeyCode::KEY_RIGHTCTRL,

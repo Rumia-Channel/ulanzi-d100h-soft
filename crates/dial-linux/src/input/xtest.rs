@@ -1,5 +1,6 @@
 //! XTEST backend: fake key/button events on the X server. Keys resolve
-//! through the server's core keymap, so characters follow the active layout.
+//! through the server's core keymap in the active XKB group, so characters
+//! follow the current layout.
 use std::sync::Mutex;
 
 use dial_core::{Key, Named};
@@ -7,6 +8,7 @@ use x11rb::{
     CURRENT_TIME,
     connection::{Connection, RequestConnection},
     protocol::{
+        xkb::{self, ConnectionExt as _},
         xproto::{
             BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ConnectionExt, KEY_PRESS_EVENT,
             KEY_RELEASE_EVENT, Window,
@@ -16,13 +18,17 @@ use x11rb::{
     rust_connection::RustConnection,
 };
 
+use xkeysym::Keysym;
+
 use super::InjectError;
 
 const SHIFT_L: u32 = 0xffe1;
+const ISO_LEVEL3_SHIFT: u32 = 0xfe03;
 
 struct Xtest {
     conn: RustConnection,
     root: Window,
+    xkb: bool,
 }
 
 static CONN: Mutex<Option<Xtest>> = Mutex::new(None);
@@ -45,10 +51,29 @@ impl Xtest {
             .reply()
             .map_err(|e| unavailable(&e))?;
         let root = conn.setup().roots[screen].root;
-        Ok(Self { conn, root })
+        let xkb = conn
+            .xkb_use_extension(1, 0)
+            .ok()
+            .and_then(|cookie| cookie.reply().ok())
+            .is_some_and(|reply| reply.supported);
+        Ok(Self { conn, root, xkb })
     }
 
-    /// Keycode and whether Shift is needed, for each keysym (group 1 only).
+    /// Active XKB group (0 = first layout); 0 without XKB.
+    fn group(&self) -> Result<usize, InjectError> {
+        if !self.xkb {
+            return Ok(0);
+        }
+        let state = self
+            .conn
+            .xkb_get_state(xkb::ID::USE_CORE_KBD.into())
+            .map_err(io)?
+            .reply()
+            .map_err(io)?;
+        Ok(usize::from(u8::from(state.group)))
+    }
+
+    /// Core keymap plus the active group to resolve keysyms in.
     fn keymap(&self) -> Result<Keymap, InjectError> {
         let setup = self.conn.setup();
         let (min, max) = (setup.min_keycode, setup.max_keycode);
@@ -62,6 +87,7 @@ impl Xtest {
             min,
             per: usize::from(reply.keysyms_per_keycode),
             syms: reply.keysyms,
+            group: self.group()?,
         })
     }
 
@@ -119,23 +145,50 @@ struct Keymap {
     min: u8,
     per: usize,
     syms: Vec<u32>,
+    group: usize,
 }
 
+/// Core-keymap columns of shift levels 1–4 (plain, Shift, AltGr,
+/// AltGr+Shift) per XKB group. Groups past the second are not in the core
+/// map; those fall back to the first group.
+const LEVEL_COLUMNS: [[usize; 4]; 2] = [[0, 1, 4, 5], [2, 3, 6, 7]];
+
 impl Keymap {
-    /// First keycode producing `keysym`, unshifted preferred.
-    fn find(&self, keysym: u32) -> Option<(u8, bool)> {
+    /// First keycode with a keysym accepted by `wanted` in `group`, as
+    /// (keycode, level index into [`LEVEL_COLUMNS`]); lower levels win.
+    fn find_in(&self, group: usize, wanted: impl Fn(u32) -> bool) -> Option<(u8, usize)> {
         if self.per == 0 {
             return None;
         }
-        let rows = || self.syms.chunks(self.per).zip(self.min..=u8::MAX);
-        let column = |col: usize| {
-            rows()
-                .find(|(row, _)| row.get(col) == Some(&keysym))
-                .map(|(_, code)| code)
-        };
-        column(0)
-            .map(|code| (code, false))
-            .or_else(|| column(1).map(|code| (code, true)))
+        let columns = LEVEL_COLUMNS.get(group).unwrap_or(&LEVEL_COLUMNS[0]);
+        columns.iter().enumerate().find_map(|(level, &col)| {
+            self.syms
+                .chunks(self.per)
+                .zip(self.min..=u8::MAX)
+                .find(|(row, _)| row.get(col).is_some_and(|&sym| sym != 0 && wanted(sym)))
+                .map(|(_, code)| (code, level))
+        })
+    }
+
+    /// Named keys: the active group first, then any other, since for
+    /// shortcuts like Ctrl+C the physical key is what matters.
+    fn find_named(&self, keysym: u32) -> Option<(u8, usize)> {
+        std::iter::once(self.group)
+            .chain(0..LEVEL_COLUMNS.len())
+            .find_map(|group| self.find_in(group, |sym| sym == keysym))
+    }
+
+    /// Characters: the active group only — another group's key would type
+    /// something else. Legacy keysyms (e.g. Cyrillic_shorti for `й`) match
+    /// by the character they produce; keypad keys never stand in for it.
+    fn find_char(&self, c: char) -> Option<(u8, usize)> {
+        let exact = char_keysym(c);
+        self.find_in(self.group, |sym| sym == exact).or_else(|| {
+            self.find_in(self.group, |sym| {
+                let sym = Keysym::new(sym);
+                !sym.is_keypad_key() && sym.key_char() == Some(c)
+            })
+        })
     }
 }
 
@@ -223,12 +276,39 @@ fn describe(key: Key) -> String {
     }
 }
 
-/// Keycodes to press in order; an unshifted-unreachable character gets Shift
-/// pressed before it unless the chord already holds one.
+/// Letters and digits missing from every layout group (e.g. a Russian-only
+/// keymap) fall back to their US physical key, like a shortcut typed by hand.
+fn physical(key: Named) -> Option<(u8, usize)> {
+    match key {
+        Named::Alnum(_) => super::uinput::named_code(key)
+            .and_then(|code| u8::try_from(code.0 + 8).ok())
+            .map(|code| (code, 0)),
+        _ => None,
+    }
+}
+
+/// Add the key for modifier `keysym` unless already pressed.
+fn push_modifier(
+    keymap: &Keymap,
+    codes: &mut Vec<u8>,
+    missing: &mut Vec<String>,
+    keysym: u32,
+    name: &str,
+) {
+    match keymap.find_named(keysym) {
+        Some((code, _)) if !codes.contains(&code) => codes.push(code),
+        Some(_) => {}
+        None => missing.push(name.to_string()),
+    }
+}
+
+/// Keycodes to press in order. A key on a shifted level gets Shift pressed
+/// before it unless the chord already holds one; level 3/4 keys get AltGr
+/// (ISO_Level3_Shift).
 fn resolve(keymap: &Keymap, keys: &[Key]) -> Result<Vec<u8>, InjectError> {
     let lookup = |sym: Sym| match sym {
-        Sym::Code(code) => Some((code, false)),
-        Sym::Keysym(keysym) => keymap.find(keysym),
+        Sym::Code(code) => Some((code, 0)),
+        Sym::Keysym(keysym) => keymap.find_named(keysym),
     };
     let mut codes = Vec::new();
     let mut missing = Vec::new();
@@ -237,19 +317,18 @@ fn resolve(keymap: &Keymap, keys: &[Key]) -> Result<Vec<u8>, InjectError> {
         .any(|k| matches!(k, Key::Named(Named::Shift | Named::RShift)));
     for &key in keys {
         let found = match key {
-            Key::Named(named) => named_sym(named).and_then(lookup),
-            Key::Char(c) => keymap.find(char_keysym(c)),
+            Key::Named(named) => named_sym(named)
+                .and_then(lookup)
+                .or_else(|| physical(named)),
+            Key::Char(c) => keymap.find_char(c),
         };
         match found {
-            Some((code, shift)) => {
-                if shift && !has_shift {
-                    match keymap.find(SHIFT_L) {
-                        Some((shift_code, _)) if !codes.contains(&shift_code) => {
-                            codes.push(shift_code)
-                        }
-                        Some(_) => {}
-                        None => missing.push("Shift".to_string()),
-                    }
+            Some((code, level)) => {
+                if level % 2 == 1 && !has_shift {
+                    push_modifier(keymap, &mut codes, &mut missing, SHIFT_L, "Shift");
+                }
+                if level >= 2 {
+                    push_modifier(keymap, &mut codes, &mut missing, ISO_LEVEL3_SHIFT, "AltGr");
                 }
                 codes.push(code);
             }
@@ -318,28 +397,45 @@ pub(super) fn send_wheel(
 mod tests {
     use super::*;
 
-    /// Tiny US-like keymap: keycode 10 = 1/!, 21 = =/+, 38 = a/A, 50 = Shift_L.
-    fn keymap() -> Keymap {
-        let mut syms = vec![0; 60 * 2];
-        let mut set = |code: usize, plain: u32, shifted: u32| {
-            syms[(code - 8) * 2] = plain;
-            syms[(code - 8) * 2 + 1] = shifted;
+    const PER: usize = 8;
+
+    /// Tiny keymap, group 1 US-like / group 2 Russian-like: 10 = 1/!,
+    /// 21 = =/+, 24 = q/Q | й/Й (AltGr: @), 38 = a/A | ф/Ф, 50 = Shift_L,
+    /// 37 = Control_L, 92 = ISO_Level3_Shift, 86 = KP_Add.
+    fn keymap(group: usize) -> Keymap {
+        let mut syms = vec![0; 100 * PER];
+        let mut set = |code: usize, col: usize, sym: u32| syms[(code - 8) * PER + col] = sym;
+        let mut both = |code: usize, plain: u32, shifted: u32| {
+            for col in [0, 2] {
+                set(code, col, plain);
+                set(code, col + 1, shifted);
+            }
         };
-        set(10, '1' as u32, '!' as u32);
-        set(21, '=' as u32, '+' as u32);
-        set(38, 'a' as u32, 'A' as u32);
-        set(50, SHIFT_L, 0);
-        set(37, 0xffe3, 0);
+        both(10, '1' as u32, '!' as u32);
+        both(21, '=' as u32, '+' as u32);
+        both(50, SHIFT_L, 0);
+        both(37, 0xffe3, 0);
+        both(92, ISO_LEVEL3_SHIFT, 0);
+        both(86, 0xffab, 0);
+        for (code, cols) in [
+            (24, ['q' as u32, 'Q' as u32, 0x6ca, 0x6ea, '@' as u32]),
+            (38, ['a' as u32, 'A' as u32, 0x6c6, 0x6e6, 0]),
+        ] {
+            for (col, sym) in cols.into_iter().enumerate() {
+                set(code, col, sym);
+            }
+        }
         Keymap {
             min: 8,
-            per: 2,
+            per: PER,
             syms,
+            group,
         }
     }
 
     #[test]
     fn resolves_through_keymap() {
-        let km = keymap();
+        let km = keymap(0);
         let codes = |keys: &[Key]| resolve(&km, keys).map_err(|e| e.to_string());
         assert_eq!(
             codes(&[Key::Named(Named::Ctrl), Key::Char('=')]),
@@ -360,6 +456,29 @@ mod tests {
                 .unwrap_err()
                 .contains('é')
         );
+        // A keypad key never stands in for the main-row character.
+        assert_eq!(codes(&[Key::Char('+')]), Ok(vec![50, 21]));
+        assert_eq!(codes(&[Key::Char('@')]), Ok(vec![92, 24]));
+        assert!(codes(&[Key::Char('й')]).is_err());
+    }
+
+    #[test]
+    fn follows_the_active_group() {
+        let km = keymap(1);
+        let codes = |keys: &[Key]| resolve(&km, keys).map_err(|e| e.to_string());
+        // Legacy Cyrillic keysyms match by character.
+        assert_eq!(codes(&[Key::Char('й')]), Ok(vec![24]));
+        assert_eq!(codes(&[Key::Char('Ф')]), Ok(vec![50, 38]));
+        // Latin letters are not in group 2: a character is unmappable, a
+        // named key falls back to its group-1 physical key.
+        assert!(codes(&[Key::Char('q')]).is_err());
+        assert_eq!(
+            codes(&[Key::Named(Named::Ctrl), Key::Named(Named::Alnum('Q'))]),
+            Ok(vec![37, 24])
+        );
+        assert_eq!(codes(&[Key::Char('+')]), Ok(vec![50, 21]));
+        // Not in the keymap at all: the US physical key (evdev KEY_Z + 8).
+        assert_eq!(codes(&[Key::Named(Named::Alnum('Z'))]), Ok(vec![52]));
     }
 
     #[test]
