@@ -171,6 +171,10 @@ const JOG_ABS_MAX: i32 = 4096;
 const JOG_ABS_MIN: i32 = -4096;
 /// Dead-zero half-range in absolute-deadzero mode.
 const JOG_DEADZERO: i32 = 300;
+/// Max delta per input report in relative modes. The real wheel emits
+/// ~8192 counts/turn but spreads them across host polls; dumping the
+/// whole backlog into one report makes Resolve lurch.
+const JOG_REPORT_CAP: i32 = 4096;
 
 /// Authentication state machine (KipJM/blackmacro-lib pico/modules/auth.py).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -388,20 +392,34 @@ impl SpeedEditor {
             return Some(r);
         }
         if s.jog_dirty {
-            s.jog_dirty = false;
             let mut r = Vec::with_capacity(7);
             r.push(0x03); // report 3: wheel
             r.push(s.jog_mode);
-            let value = match s.jog_mode {
+            match s.jog_mode {
                 RELATIVE | RELATIVE_FINE => {
+                    // Emit at most JOG_REPORT_CAP per report and keep the
+                    // rest queued so a fast flick becomes a stream of
+                    // reports (smooth shuttle) instead of one lurch.
                     let delta = s.shaft.wrapping_sub(s.shaft_sent);
-                    s.shaft_sent = s.shaft;
-                    delta
+                    let emit = delta.clamp(-JOG_REPORT_CAP, JOG_REPORT_CAP);
+                    s.shaft_sent = s.shaft_sent.wrapping_add(emit);
+                    r.extend_from_slice(&emit.to_le_bytes());
+                    if s.shaft != s.shaft_sent {
+                        s.jog_dirty = true; // more to drain next poll
+                    } else {
+                        s.jog_dirty = false;
+                    }
                 }
-                ABSOLUTE_DEADZERO if s.shaft.abs() < JOG_DEADZERO => 0,
-                _ => s.shaft.clamp(JOG_ABS_MIN, JOG_ABS_MAX),
-            };
-            r.extend_from_slice(&value.to_le_bytes());
+                mode => {
+                    let value = if mode == ABSOLUTE_DEADZERO && s.shaft.abs() < JOG_DEADZERO {
+                        0
+                    } else {
+                        s.shaft.clamp(JOG_ABS_MIN, JOG_ABS_MAX)
+                    };
+                    r.extend_from_slice(&value.to_le_bytes());
+                    s.jog_dirty = false;
+                }
+            }
             // Trailing flag byte, 1 on the real device (see jog.py).
             r.push(1);
             return Some(r);
