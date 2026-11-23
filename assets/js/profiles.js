@@ -11,6 +11,19 @@ const sorted = () => [...config.rules].sort((a, b) =>
 
 const bindingFor = (rule, input) => rule.bindings.find(b => b.input === input);
 
+// Split a chord on '+', but a '+' is a literal key when the current token
+// is empty: "ctrl++" -> ["ctrl","+"], "+" -> ["+"], "a + b" -> ["a","b"].
+function parseChord(raw) {
+  const out = [];
+  let tok = "";
+  for (const ch of String(raw)) {
+    if (ch === "+" && tok !== "") { out.push(tok.trim()); tok = ""; }
+    else tok += ch;
+  }
+  if (tok !== "") out.push(tok.trim());
+  return out.map(s => s.trim()).filter(Boolean);
+}
+
 let currentProfile = -1;
 let selectedInput = null;
 const slotEls = {};
@@ -26,6 +39,9 @@ export function initProfiles(navigate) {
   document.getElementById("save-config").onclick = saveConfig;
   document.getElementById("act-type").onchange = () => { applyActionEdit(); syncActValue(); };
   document.getElementById("act-value").oninput = applyActionEdit;
+  document.getElementById("wheel-notches").oninput = applyActionEdit;
+  document.getElementById("wheel-horizontal").onchange = applyActionEdit;
+  document.getElementById("wheel-mods").oninput = applyActionEdit;
 }
 
 export async function loadConfig() {
@@ -164,12 +180,19 @@ function renderInspector() {
   const val = document.getElementById("act-value");
   val.value = act.type === "keys" ? (act.keys || []).join("+")
     : act.type === "command" ? (act.name || "") : "";
+  document.getElementById("wheel-notches").value = act.type === "wheel" ? (act.notches ?? 1) : "";
+  document.getElementById("wheel-horizontal").checked = !!act.horizontal;
+  document.getElementById("wheel-mods").value =
+    act.type === "wheel" ? (act.modifiers || []).join("+") : "";
   syncActValue();
 }
 
 function syncActValue() {
   const t = document.getElementById("act-type").value;
   const val = document.getElementById("act-value");
+  const wheel = t === "wheel";
+  document.getElementById("wheel-opts").hidden = !wheel;
+  val.closest(".field").hidden = wheel;
   val.disabled = t === "none";
   val.placeholder = t === "keys" ? "keys, e.g. ctrl+alt+j"
     : t === "command" ? "command name" : "—";
@@ -182,13 +205,27 @@ function applyActionEdit() {
   const raw = document.getElementById("act-value").value;
   let binding = bindingFor(rule, selectedInput);
   if (type === "none" && !binding) return;
+  const prevType = binding ? binding.action?.type : null;
   if (!binding) {
     binding = { input: selectedInput, action: { type: "none" } };
     rule.bindings.push(binding);
   }
   if (type === "none") binding.action = { type: "none" };
   else if (type === "keys")
-    binding.action = { type: "keys", keys: raw.split("+").map(s => s.trim()).filter(Boolean) };
+    binding.action = { type: "keys", keys: parseChord(raw) };
+  else if (type === "wheel") {
+    const notchesEl = document.getElementById("wheel-notches");
+    // CW rotations scroll down; everything else defaults up.
+    const def = selectedInput === "rotate_cw" || selectedInput === "rotate_held_cw" ? -1 : 1;
+    if (prevType !== "wheel") notchesEl.value = def;
+    let notches = parseInt(notchesEl.value, 10);
+    if (isNaN(notches) || notches === 0) notches = def;
+    binding.action = {
+      type: "wheel", notches,
+      horizontal: document.getElementById("wheel-horizontal").checked,
+      modifiers: parseChord(document.getElementById("wheel-mods").value),
+    };
+  }
   else binding.action = { type: "command", name: raw.trim() };
   refreshWheelDots();
 }

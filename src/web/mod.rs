@@ -121,12 +121,15 @@ async fn api_config_put(
     if !authorized(&state, &q.token) {
         return Err(StatusCode::UNAUTHORIZED);
     }
-    let config = match dial_core::Config::from_json(&body) {
+    let config = match dial_core::Config::from_json(&body)
+        .map_err(|e| e.to_string())
+        .and_then(|config| config.validate().map(|()| config))
+    {
         Ok(config) => config,
         Err(error) => {
             return Ok(Json(serde_json::json!({
                 "saved": false,
-                "error": error.to_string(),
+                "error": error,
             })));
         }
     };

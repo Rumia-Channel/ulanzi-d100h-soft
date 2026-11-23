@@ -112,4 +112,22 @@ mod tests {
         assert_eq!(config.rules[0].name, "high");
         assert_eq!(config.rules[0].bindings[0].input.id(), "rotate_cw");
     }
+
+    #[test]
+    fn validate_rejects_unrunnable_bindings() {
+        let parse = |action: &str| {
+            Config::from_json(&format!(
+                r#"{{"rules":[{{"name":"r","match":{{"type":"always"}},
+                   "bindings":[{{"input":"rotate_cw","action":{action}}}]}}]}}"#
+            ))
+            .unwrap()
+            .validate()
+        };
+        assert!(parse(r#"{"type":"keys","keys":["ctrl","="]}"#).is_ok());
+        assert!(parse(r#"{"type":"wheel","modifiers":["alt"]}"#).is_ok());
+        assert!(parse(r#"{"type":"keys","keys":["ctrl","bogus"]}"#).unwrap_err().contains("bogus"));
+        assert!(parse(r#"{"type":"keys","keys":[]}"#).is_err());
+        assert!(parse(r#"{"type":"wheel","notches":0}"#).is_err());
+        assert!(parse(r#"{"type":"wheel","modifiers":["j"]}"#).unwrap_err().contains("j"));
+    }
 }
