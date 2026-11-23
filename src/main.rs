@@ -6,7 +6,9 @@
 mod ble;
 mod config;
 mod engine;
+mod platform;
 mod state;
+#[cfg(windows)]
 mod tray;
 mod web;
 
@@ -53,6 +55,13 @@ async fn main() {
     #[cfg(windows)]
     tray::spawn(url.clone(), token.clone(), port);
 
+    // Open the injection backend now so permission problems show at startup.
+    #[cfg(target_os = "linux")]
+    match dial_linux::init_input() {
+        Ok(backend) => println!("input injection: {backend}"),
+        Err(error) => eprintln!("{error}"),
+    }
+
     // axum on loopback.
     let listener = match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
         Ok(listener) => listener,
@@ -65,7 +74,7 @@ async fn main() {
 
     // BLE worker + rule engine + foreground watcher.
     let ble_task = tokio::spawn(ble::run(app.clone(), ble_rx));
-    let focus_rx = dial_win32::focus_events();
+    let focus_rx = platform::focus_events();
     let engine = engine::Engine::new(
         app.clone(),
         reload_rx,

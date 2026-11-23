@@ -306,7 +306,7 @@ export function initConfigPage() {
     .then(r => r.ok ? r.json() : [])
     .then(names => {
       const list = document.getElementById("proc-list");
-      names.filter(n => n.endsWith(".exe")).forEach(n => {
+      names.forEach(n => {
         const o = document.createElement("option");
         o.value = n;
         list.append(o);

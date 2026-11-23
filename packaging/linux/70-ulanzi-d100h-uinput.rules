@@ -1,0 +1,5 @@
+# Lets the logged-in user (and the input group) create the virtual keyboard
+# and wheel used by ulanzi-d100h-soft on Wayland or without X11.
+# Install: sudo cp 70-ulanzi-d100h-uinput.rules /etc/udev/rules.d/ &&
+#          sudo udevadm control --reload && sudo udevadm trigger /dev/uinput
+KERNEL=="uinput", SUBSYSTEM=="misc", GROUP="input", MODE="0660", TAG+="uaccess"

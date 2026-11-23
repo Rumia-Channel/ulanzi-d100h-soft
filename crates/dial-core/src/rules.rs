@@ -26,11 +26,26 @@ pub fn active_rule(config: &Config, world: &World) -> Option<usize> {
         .map(|(i, _)| i)
 }
 
+/// Lowercased process name without a trailing ".exe", so one profile written
+/// as "resolve.exe" also matches Linux's "resolve" (and vice versa).
+fn process_key(name: &str) -> String {
+    let lower = name.trim().to_lowercase();
+    match lower.strip_suffix(".exe") {
+        Some(stem) => stem.to_string(),
+        None => lower,
+    }
+}
+
+fn is_running(process: &str, world: &World) -> bool {
+    let key = process_key(process);
+    world.running.iter().any(|name| process_key(name) == key)
+}
+
 fn matches(when: &Match, world: &World) -> bool {
     match when {
-        Match::Foreground { process } => world.foreground.eq_ignore_ascii_case(process),
-        Match::Running { process } => world.running.contains(&process.to_lowercase()),
-        Match::NotRunning { process } => !world.running.contains(&process.to_lowercase()),
+        Match::Foreground { process } => process_key(world.foreground) == process_key(process),
+        Match::Running { process } => is_running(process, world),
+        Match::NotRunning { process } => !is_running(process, world),
         Match::Always => true,
     }
 }
@@ -129,5 +144,21 @@ mod tests {
         assert!(parse(r#"{"type":"keys","keys":[]}"#).is_err());
         assert!(parse(r#"{"type":"wheel","notches":0}"#).is_err());
         assert!(parse(r#"{"type":"wheel","modifiers":["j"]}"#).unwrap_err().contains("j"));
+    }
+
+    #[test]
+    fn exe_suffix_is_optional() {
+        let running = procs(&["resolve"]);
+        let config = Config {
+            rules: vec![
+                rule("fg", 10, Match::Foreground { process: "Resolve.exe".into() }),
+                rule("run", 5, Match::Running { process: "resolve.exe".into() }),
+            ],
+            ..Default::default()
+        };
+        assert_eq!(active_rule(&config, &world("resolve", &running)), Some(0));
+        assert_eq!(active_rule(&config, &world("", &running)), Some(1));
+        assert_eq!(active_rule(&config, &world("", &procs(&["resolve.exe"]))), Some(1));
+        assert_eq!(active_rule(&config, &world("resolver", &procs(&["resolver"]))), None);
     }
 }
